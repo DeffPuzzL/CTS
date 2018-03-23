@@ -1,0 +1,41 @@
+#include "model.h"
+#include <libgen.h>
+#include <assert.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+int
+main(int argc, char const *argv[])
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+        char user[20] = {0};
+        char passwd[20] = {0};
+        char oracle_sid[20] = {0};
+    EXEC SQL END DECLARE SECTION;
+
+    lInitRunTest("model_demo");
+
+    strcpy(user, "fspf_routenc_dev");
+    strcpy(passwd, "fspf_routenc_dev");
+    strcpy(oracle_sid, "oradb01");
+
+    EXEC SQL CONNECT :user IDENTIFIED BY :passwd USING :oracle_sid;
+
+    if (sqlca.sqlcode)
+    {
+        fprintf(stderr, "line:%d, err:%d:%s.\n", __LINE__, sqlca.sqlerrm.sqlerrml, sqlca.sqlerrm.sqlerrmc);
+        exit(-1);
+    }
+
+    srandom(time(NULL));
+
+    assert(0 == model_init());
+
+    model_sort();
+
+    IBPrace("result:%d", model_judge(LMER_CON, 1));
+
+    model_destroy();
+
+    return 0;
+}

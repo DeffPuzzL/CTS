@@ -1,0 +1,41 @@
+#|----------------------------------------------------------------------------|
+#|                           TOPMake 2.0                                      |
+#| Copyright (c) 2000-2004 Shanghai Huateng Software Systems Co., Ltd.        |
+#|    All Rights Reserved                                                     |
+#|----------------------------------------------------------------------------|
+#| FILE NAME     : platform.hpuxia64.mak                                      |
+#|----------------------------------------------------------------------------|
+
+SHELL = /bin/sh
+
+CC    = gcc  
+CXX   = aCC
+DLINK = ld
+SLINK = ar 
+DLFLG = -b +s +allowdups
+SLFLG = ruc
+#CCFLG = +z  -D_REENTRANT 
+CCFLG = -D_REENTRANT -g
+#CCFLG = -mlp64
+CXXFLG= +z   
+#EXFLG= -mlp64
+#EXFLG = +z  
+EXFLG = -g
+DBFLG =  
+OPFLG = -O
+DLFIX = .so
+#DLFIX = .so
+SLFIX = .a
+UXLIBS = 
+#UXLIBS = -lm -lc 
+DLLIBS =
+NETLIBS =
+CURLIBS = -lcurses
+CRYLIBS =
+THREADLIBS = -lpthread 
+XLIBS = -lXext -lX11
+XLIBP = /usr/lib/X11R6
+OSDEF = -DHP_UNIX
+#PROCDEF = -DIA64
+OSTYPE = hpux
+JAVAMD = hp-ux

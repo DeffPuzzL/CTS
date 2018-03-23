@@ -1,0 +1,47 @@
+#!/bin/sh
+cd $ONLINE_HOME/src/Common 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/Convert 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/CstDbs 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/Dbs 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/Cust 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/Bridge 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/SwSrv
+rm -f *.o  
+
+cd $ONLINE_HOME/src/Manage 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/POSManage 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/ExpSrv
+rm -f *.o  
+
+cd $ONLINE_HOME/src/TrsSrv
+rm -f *.o  
+
+cd $ONLINE_HOME/src/FwdSrv 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/ToCtrl 
+rm -f *.o  
+
+cd $ONLINE_HOME/src/Dumpmsg
+rm -f *.o  
+
+cd $ONLINE_HOME/src/Comm
+rm -f *.o
+cd $ONLINE_HOME/src/Daemon 
+rm -f *.o  

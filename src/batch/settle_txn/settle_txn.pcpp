@@ -1,0 +1,683 @@
+/**************************************************************************************************
+    文 件 名：demo.pc
+    代码作者：DeffPuzzL
+    编写版本：
+    创建日期：2016-07-14
+    功能描述：demo实现业务模块
+ **************************************************************************************************/
+#include    "settle_txn.h"
+#include    "algo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+#include    "tbl_mcht_fund.h"
+#include    "tbl_settle_txn.h"
+#include    "tbl_settle_err.h"
+EXEC SQL END DECLARE SECTION;
+
+/**************************************************************************************************
+    方法定义
+ **************************************************************************************************/
+CSettle::stEvent CSettle::m_stEvent[] =
+{
+    {"settle",               &CSettle::vGenSettleTxn },
+    {"update",               &CSettle::vUpdSettleTxn },
+    { "", NULL }
+};
+
+/**************************************************************************************************
+    函 数 名：CSettle()
+    功能描述：构造函数
+    返回说明：
+ **************************************************************************************************/
+CSettle::CSettle()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：~CSettle()
+    功能描述：析构函数
+    返回说明：
+ **************************************************************************************************/
+CSettle::~CSettle()
+{
+
+
+}
+
+/**************************************************************************************************
+    函 数 名：lRunObject(char* in_szClass, char* in_szAction)
+    功能描述：运行类中的方法
+    返回说明：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ **************************************************************************************************/
+long    CSettle::lRunObject(char *in_szClass, char *in_szAction)
+{
+    int     i = 0;
+    char    *p, szAction[256];
+
+    memset(szAction, 0, sizeof(szAction));
+
+    if ((p = strstr(in_szAction, "__")) != NULL)
+    {
+        strncpy(szAction, in_szAction, p - in_szAction);
+    }
+    else
+    {
+        strcpy(szAction, in_szAction);
+    }
+
+    while (0 != strcmp(m_stEvent[i].m_szName, ""))
+    {
+        if (0 == strcmp(m_stEvent[i].m_szName, szAction))
+        {
+            (this->*m_stEvent[i].m_pEvent)();
+            return RC_SUCC;
+        }
+
+        i++;
+    }
+
+    SYSError(RET_SYSTEM, "组件(%s)的事件(%s)没注册", in_szClass, in_szAction);
+    return RC_FAIL;
+}
+
+/**************************************************************************************************
+    函 数 名：lUpdateError(TSettleTxn *pstSettle)
+    功能描述：直接将清算流水重置失败
+    返回说明：
+        RC_SUCC
+        RC_FAIL
+ **************************************************************************************************/
+long    CSettle::lUpdateError(TSettleTxn *pstSettle)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TSettleTxn   stSettle;
+    EXEC SQL END DECLARE SECTION;
+    GCts         *pstCts = (GCts *)pGetGloble();
+    SATvm        *pstSavm = (SATvm *)pGetSATvm();
+
+    memcpy(&stSettle, pstSettle, sizeof(TSettleTxn));
+    stSettle.result_flag[0] = SETTLE_IN_FLAG_FAIL;
+    strncpy(stSettle.status, pstCts->m_szRetCode, sizeof(stSettle.status) - 1);
+    strncpy(stSettle.status_msg, pstCts->m_szRetMsg, sizeof(stSettle.status_msg) - 1);
+    
+    EXEC SQL UPDATE TBL_SETTLE_TXN SET
+        RESULT_FLAG     = :stSettle.result_flag,
+        STATUS          = :stSettle.status,
+        STATUS_MSG      = :stSettle.status_msg,
+        UPDATE_TIME     = :stSettle.update_time
+    WHERE ID = :stSettle.id;
+    if (SQLCODE)
+    {
+        SYSError(RET_DATABASE, "更新清算流水(%s)失败, err:(%d)(%s)", stSettle.id,     
+            SQLCODE, sDbsError());
+        return RC_FAIL;
+    }
+  
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：lInsertSettle(TSettleTxn *pstSettle, TMchtFund *pstFund, long lSeqNo)
+    功能描述：初始化清算流水
+    返回说明：
+        RC_SUCC
+        RC_FAIL
+ **************************************************************************************************/
+long    CSettle::lInsertSettle(TSettleTxn *pstSettle, TMchtFund *pstFund, long lSeqNo)
+{
+    dbMchtAcct   stAcct;
+
+    pstSettle->settle_amt = pstFund->settle_amt;
+    strncpy(pstSettle->currency, "CNY", sizeof(pstSettle->currency));
+    snprintf(pstSettle->id, sizeof(pstSettle->id), "%s%012d", sGetTxDate(), lSeqNo);
+    snprintf(pstSettle->trace_no, sizeof(pstSettle->trace_no), "%s%012d", pstSettle->settle_date + 1, lSeqNo);
+    strncpy(pstSettle->pay_order, pstFund->id, sizeof(pstSettle->pay_order) - 1);
+    strncpy(pstSettle->tx_date, pstFund->tx_date, sizeof(pstSettle->tx_date) - 1);
+    strncpy(pstSettle->settle_num, pstFund->settle_num, sizeof(pstSettle->settle_num) - 1);
+    strncpy(pstSettle->channel_no, pstFund->channel_no, sizeof(pstSettle->channel_no) - 1);
+    strncpy(pstSettle->mert_no, pstFund->mert_no, sizeof(pstSettle->mert_no) - 1);
+    strncpy(pstSettle->mert_nm, pstFund->mert_nm, sizeof(pstSettle->mert_nm) - 1);
+    strncpy(pstSettle->pay_acct, sGetDbsEnv(pstSettle->channel_no), sizeof(pstSettle->pay_acct) - 1);
+
+    if(RC_SUCC != lGetMchtAcct(&stAcct, pstSettle->mert_no))
+    {
+        SYSError(RET_SYSTEM, "获取商户(%s)账户信息失败, err:(%s)", pstSettle->mert_no, 
+            sGetError());
+        return RC_FAIL;
+    }
+
+    pstSettle->result_flag[0] = SETTLE_IN_FLAG_PREQ;
+    strncpy(pstSettle->acct_no, stAcct.acct_no, sizeof(pstSettle->acct_no));
+    strncpy(pstSettle->acct_nm, stAcct.acct_nm, sizeof(pstSettle->acct_nm));
+    strncpy(pstSettle->acct_type, stAcct.acct_type, sizeof(pstSettle->acct_type));
+    strncpy(pstSettle->acct_bank_no, stAcct.acct_bank_no, sizeof(pstSettle->acct_bank_no));
+    strncpy(pstSettle->acct_bank_nm, stAcct.acct_bank_nm, sizeof(pstSettle->acct_bank_nm));
+    strncpy(pstSettle->acct_zbank_no, stAcct.acct_zbank_no, sizeof(pstSettle->acct_zbank_no));
+    strncpy(pstSettle->acct_zbank_nm, stAcct.acct_zbank_nm, sizeof(pstSettle->acct_zbank_nm));
+    strncpy(pstSettle->acct_zbank_addr, stAcct.acct_zbank_addr, sizeof(pstSettle->acct_zbank_addr));
+    strncpy(pstSettle->acct_zbank_code, stAcct.acct_zbank_code, sizeof(pstSettle->acct_zbank_code));
+    strncpy(pstSettle->acct_net_no, stAcct.acct_net_no, sizeof(pstSettle->acct_net_no));
+    strncpy(pstSettle->acct_union_no, stAcct.acct_union_no, sizeof(pstSettle->acct_union_no));
+    strncpy(pstSettle->cert_type, stAcct.cert_type, sizeof(pstSettle->cert_type) - 1);
+    strncpy(pstSettle->cert_no, stAcct.cert_no, sizeof(pstSettle->cert_no) - 1);
+    strncpy(pstSettle->resv_phone, stAcct.resv_phone, sizeof(pstSettle->resv_phone) - 1);
+    strncpy(pstSettle->create_time, sGetCurrentTime(), sizeof(pstSettle->create_time) - 1);
+
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：lUpdateSettle()
+    功能描述：更新商户资金清算状态
+    返回说明：
+        RC_SUCC
+        RC_FAIL
+ **************************************************************************************************/
+long    CSettle::lUpdateSettle(TSettleTxn *pstSettle)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TMchtFund    stFund;
+    TSettleErr   stError;
+    TSettleTxn   stSettle;
+    EXEC SQL END DECLARE SECTION;
+
+    memset(&stFund, 0, sizeof(TMchtFund));
+    memset(&stError, 0, sizeof(TSettleErr));
+    memcpy(&stSettle, pstSettle, sizeof(TSettleTxn));
+    IBPgetdefstring("pay_BankSeqNo", stSettle.bank_seqno, "");
+    IBPgetdefstring("pay_BankBatNo", stSettle.bank_batch_no, "");
+    IBPgetdefstring("pay_BankCode", stSettle.bank_status, "");
+    IBPgetdefstring("pay_BankMsg", stSettle.bank_status_msg, "");
+    IBPgetdefstring("pay_BankBatchNo", stSettle.bank_batch_no, "");
+    IBPgetdefstring("pay_BankSeqNo", stSettle.bank_seqno, "");
+    IBPgetstring("pay_OrderSerial", stSettle.id, "idx");
+    IBPgetstring("pay_Status", stSettle.result_flag, "业务响应码");
+    IBPgetstring("pay_BussCode", stSettle.status, "业务响应码");
+    IBPgetstring("pay_BussMsg", stSettle.status_msg, "业务响应信息");
+    strncpy(stSettle.in_date, sGetTxDate(), sizeof(stSettle.in_date));
+    strncpy(stSettle.update_time, sGetCurrentTime(), sizeof(stSettle.update_time));
+    if(IBPIserr())
+        return lUpdateError(pstSettle);
+
+    EXEC SQL UPDATE TBL_SETTLE_TXN SET
+        RESULT_FLAG     = :stSettle.result_flag,
+        IN_DATE         = :stSettle.in_date,    
+        STATUS          = :stSettle.status,
+        STATUS_MSG      = :stSettle.status_msg,
+        BANK_STATUS     = :stSettle.bank_status,
+        BANK_STATUS_MSG = :stSettle.bank_status_msg,
+        BANK_BATCH_NO   = :stSettle.bank_batch_no,
+        BANK_SEQNO      = :stSettle.bank_seqno,
+        UPDATE_TIME     = :stSettle.update_time
+    WHERE ID = :stSettle.id;
+    if (SQLCODE)
+    {
+       SYSError(RET_DATABASE, "更新清算流水(%s)失败, err:(%d)(%s)", stSettle.id,     
+           SQLCODE, sDbsError());
+       return RC_FAIL;
+    }
+
+    EXEC SQL SELECT * INTO :stSettle FROM TBL_SETTLE_TXN WHERE ID = :stSettle.id;
+    if(SQLCODE)
+    {
+       SYSError(RET_DATABASE, "获取清算流水(%s)失败, err:(%d)(%s)", stSettle.id,     
+            SQLCODE, sDbsError());
+       return RC_FAIL;
+    }
+
+    if(SETTLE_IN_FLAG_SUCC == stSettle.result_flag[0])
+    {
+        stFund.result_flag[0] = SETTLE_MCHT_SUCC;
+        stError.err_type[0] = ERROR_ER_SETTLE_SUCC;
+    }
+    else if(SETTLE_IN_FLAG_FAIL == stSettle.result_flag[0]) 
+    {
+        stFund.result_flag[0] = SETTLE_MCHT_ERROR;
+        stError.err_type[0] = ERROR_ER_SETTLE_FAIL;
+    }
+    else
+    {
+        stFund.result_flag[0] = SETTLE_MCHT_PUTREQ;
+        stError.err_type[0] = ERROR_ER_SETTLE_UNKOWN;
+    }
+
+    EXEC SQL UPDATE TBL_MCHT_FUND SET
+        RESULT_FLAG = :stSettle.result_flag,    
+        RESULT_DESC = :stSettle.status_msg,
+        IN_DATE     = :stSettle.in_date,    
+        PAY_TIME    = :stSettle.update_time,    
+        UPDATE_TIME = :stSettle.update_time
+    WHERE ID = :stSettle.pay_order;
+    if(SQLCODE || EFFECT_NUM != 1)
+    {
+        SYSError(RET_DATABASE, "更新商户汇总(%s)失败, err:(%d)(%s)", stSettle.mert_no, 
+            SQLCODE, sDbsError());
+        return RC_FAIL;
+    } 
+
+    //    处理差错TBL_SETTLE_ERR表记录
+    EXEC SQL SELECT * INTO :stError FROM TBL_SETTLE_ERR WHERE ID = :stSettle.pay_order;
+    if(SQLERR)
+    {
+        SYSError(RET_DATABASE, "查询户汇总(%s)入账失败表失败, err:(%d)(%s)", stSettle.mert_no,
+            SQLCODE, sDbsError());
+        return RC_FAIL;
+    }
+    else if(SQLNOTFOUND)
+    {
+        if(SETTLE_IN_FLAG_SUCC == stSettle.result_flag[0])
+            return RC_SUCC;
+        
+        stError.do_flag[0] = SETTLE_ERR_NOT_DEAL;
+
+        EXEC SQL INSERT INTO TBL_SETTLE_ERR (ID, SETTLE_DATE, IN_DATE, TX_DATE, SETTLE_NUM, 
+            CHANNEL_NO, BATCH_NO, TRACE_NO, DO_FLAG, ERR_TYPE, MERT_NO, MERT_NM, ORDER_REQ, 
+            ORDER_TIME, SETTLE_AMT, CURRENCY, STATUS, STATUS_MSG, BANK_STATUS, BANK_STATUS_MSG, 
+            BANK_BATCH_NO, BANK_SEQNO, RESV_PHONE, ACCT_NO, ACCT_NM, ACCT_TYPE, ACCT_BANK_NO, 
+            ACCT_BANK_NM, ACCT_ZBANK_NO, ACCT_ZBANK_NM, ACCT_ZBANK_ADDR, ACCT_ZBANK_CODE, 
+            ACCT_UNION_NO, ACCT_NET_NO, REMARK, CERT_TYPE, CERT_NO, EXT_PROPERTIES, CREATE_TIME) 
+        SELECT PAY_ORDER, SETTLE_DATE, :stSettle.in_date, TX_DATE, SETTLE_NUM, CHANNEL_NO, 
+            BATCH_NO, TRACE_NO, :stError.do_flag, :stError.err_type, MERT_NO, MERT_NM, 
+            ORDER_REQ, ORDER_TIME, SETTLE_AMT, CURRENCY, STATUS, STATUS_MSG, BANK_STATUS, 
+            BANK_STATUS_MSG, BANK_BATCH_NO, BANK_SEQNO, RESV_PHONE, ACCT_NO, ACCT_NM, 
+            ACCT_TYPE, ACCT_BANK_NO, ACCT_BANK_NM, ACCT_ZBANK_NO, ACCT_ZBANK_NM, 
+            ACCT_ZBANK_ADDR, ACCT_ZBANK_CODE, ACCT_UNION_NO, ACCT_NET_NO, REMARK, CERT_TYPE, 
+            CERT_NO, EXT_PROPERTIES, :stSettle.update_time
+        FROM TBL_SETTLE_TXN WHERE ID = :stSettle.id;
+    }
+    else
+    {
+        EXEC SQL UPDATE TBL_SETTLE_ERR SET ID = ID WHERE ID = :stSettle.id;
+        if(SQL_UD_ERR)
+        {
+            SYSError(RET_DATABASE, "锁定入账差错记录(%s)失败, err:(%d)(%s)", stSettle.id, 
+                SQLCODE, sDbsError());
+            return RC_FAIL;
+        }
+    
+        if(SETTLE_MCHT_SUCC == stFund.result_flag[0])
+            stError.do_flag[0] = SETTLE_ERR_SETTLE_SUCC;
+
+        EXEC SQL UPDATE TBL_SETTLE_ERR SET 
+            DO_FLAG         = :stError.do_flag,
+            ERR_TYPE        = :stError.err_type,
+            IN_DATE         = :stSettle.in_date,    
+            STATUS          = :stSettle.status,
+            STATUS_MSG      = :stSettle.status_msg,
+            BANK_STATUS     = :stSettle.bank_status,
+            BANK_STATUS_MSG = :stSettle.bank_status_msg,
+            BANK_BATCH_NO   = :stSettle.bank_batch_no,
+            BANK_SEQNO      = :stSettle.bank_seqno,
+            ORDER_REQ       = :stSettle.order_req,
+            ORDER_TIME      = :stSettle.order_time,
+            CURRENCY        = :stSettle.currency,
+            RESV_PHONE      = :stSettle.resv_phone,
+            ACCT_NO         = :stSettle.acct_no,
+            ACCT_NM         = :stSettle.acct_nm,
+            ACCT_TYPE       = :stSettle.acct_type,
+            ACCT_BANK_NO    = :stSettle.acct_bank_no,
+            ACCT_BANK_NM    = :stSettle.acct_bank_nm,
+            ACCT_ZBANK_NO   = :stSettle.acct_zbank_no,
+            ACCT_ZBANK_NM   = :stSettle.acct_zbank_nm,
+            ACCT_ZBANK_ADDR = :stSettle.acct_zbank_addr,
+            ACCT_ZBANK_CODE = :stSettle.acct_zbank_code,
+            ACCT_UNION_NO   = :stSettle.acct_union_no,
+            ACCT_NET_NO     = :stSettle.acct_net_no,
+            CERT_TYPE       = :stSettle.cert_type,
+            CERT_NO         = :stSettle.cert_no,
+            UPDATE_TIME     = :stSettle.update_time
+        WHERE ID = :stSettle.pay_order;
+    }
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "操作入账失败表(%s)失败, err:(%d)(%s)", stSettle.id, 
+            SQLCODE, sDbsError());
+        return RC_FAIL;
+    }
+
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：lCallSettlePay(TSettleTxn *pstSettle)
+    功能描述：同步发起代付指令
+    返回说明：
+        RC_SUCC
+        RC_FAIL
+ **************************************************************************************************/
+long   CSettle::lCallSettlePay(TSettleTxn *pstSettle)
+{
+    GCts     *pstCts = (GCts *)pGetGloble();
+    SATvm    *pstSavm = (SATvm *)pGetSATvm();
+
+    vResetUser();
+    IBPputlong("loop", 1);
+    IBPputstring("id", pstSettle->id);
+    IBPputstring("acct_no", pstSettle->acct_no);
+    IBPputstring("acct_nm", pstSettle->acct_nm);
+    IBPputstring("cert_no", pstSettle->cert_no);
+    IBPputstring("pay_acct", pstSettle->pay_acct);
+    IBPputstring("cert_type", pstSettle->cert_type);
+    if('0' == pstSettle->acct_type[0])
+        pstSettle->acct_type[0] = '1';
+    else
+        pstSettle->acct_type[0] = '2';
+    IBPputstring("acct_type", pstSettle->acct_type);
+    IBPputdouble("settle_amt", pstSettle->settle_amt);
+    IBPputstring("acct_net_no", pstSettle->acct_net_no);
+    IBPputstring("acct_union_no", pstSettle->acct_union_no);
+    IBPputstring("acct_bank_no", pstSettle->acct_bank_no);
+    IBPputstring("acct_bank_nm", pstSettle->acct_bank_nm);
+    IBPputstring("acct_zbank_no", pstSettle->acct_zbank_no);
+    IBPputstring("acct_zbank_nm", pstSettle->acct_zbank_nm);
+    IBPputstring("acct_zbank_addr", pstSettle->acct_zbank_addr);
+    IBPputstring("acct_zbank_code", pstSettle->acct_zbank_code);
+
+    if(RC_FAIL == lNewTrade(pstSavm, pstCts, "200000", true))
+        return lUpdateError(pstSettle);
+
+    if(IBPIsok())
+        return lUpdateSettle(pstSettle);
+    else
+        return lUpdateError(pstSettle);
+}
+
+/**************************************************************************************************
+    函 数 名：vGenSettleTxn()
+    功能描述：统计本周期商户资金
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CSettle::vGenSettleTxn()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TMchtFund    stFund;
+    TSettleTxn   stSettle;
+    char         szFlag[2], szOrder[33], szTime[15];
+    EXEC SQL END DECLARE SECTION;
+    double       dAmt = 0.00;
+    long         lCount = 0, lSeqNo = lGetSeqNo();
+
+    memset(szFlag, 0, sizeof(szFlag));
+    memset(szTime, 0, sizeof(szTime));
+    memset(szOrder, 0, sizeof(szOrder));
+    memset(&stFund, 0, sizeof(TMchtFund));
+    IBPgetstring("BAT_NUM", stFund.settle_num, "批次编号");
+    IBPgetstring("BAT_DATE", stFund.settle_date, "清算日期");
+    IBPgetstring("BAT_MCHTNO", stFund.mert_no, "代付商户号");
+    IBPgetstring("BAT_PAYTIME", szTime, "代付清算时间");
+    IBPgetstring("BAT_PAYORDER", szOrder, "代付请求订单号");
+    if(IBPIserr())
+        return ;
+
+    szFlag[0] = SETTLE_MCHT_NOTDEAL;
+    stFund.result_flag[0] = SETTLE_MCHT_RESETT;
+    IBPrace("开始处理日期(%s)商户代付清算流水批次(%s)", stFund.settle_date, stFund.settle_num);
+    EXEC SQL DECLARE Cur_mcht_fund CURSOR FOR 
+        SELECT * FROM TBL_MCHT_FUND 
+    WHERE SETTLE_DATE = :stFund.settle_date AND RESULT_FLAG IN (:szFlag, :stFund.result_flag) 
+        AND SETTLE_NUM = :stFund.settle_num AND MERT_NO = :stFund.mert_no;
+
+    EXEC SQL OPEN Cur_mcht_fund;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "打开游标失败, err:(%d)(%s)", SQLCODE, sDbsError());
+        return ;
+    }
+
+    while (1)
+    {
+        memset(&stFund, 0, sizeof(TMchtFund));
+        EXEC SQL FETCH Cur_mcht_fund INTO :stFund;
+        if(SQLERR)
+        {
+            SYSError(RET_DATABASE, "汇总商户资金失败, err:(%d)(%s)", SQLCODE, sDbsError());
+            break;
+        }
+        if(SQLNOTFOUND)
+            break;
+
+        ++ lCount;
+        dAmt += stFund.settle_amt;
+        memset(&stSettle, 0, sizeof(TSettleTxn));
+        strncpy(stSettle.order_req, szOrder, sizeof(stSettle.order_req) - 1);
+        strncpy(stSettle.order_time, szTime, sizeof(stSettle.order_time) - 1);
+        strncpy(stSettle.settle_date, stFund.settle_date, sizeof(stSettle.settle_date));
+        if(RC_SUCC != lInsertSettle(&stSettle, &stFund, ++ lSeqNo))
+            continue;
+
+        EXEC SQL INSERT INTO TBL_SETTLE_TXN VALUES(:stSettle);
+        if(SQLCODE)
+        {
+            SYSError(RET_DATABASE, "新增(%s)商户(%s)代发数据失败, err:(%d)(%s)", stSettle.id, 
+                stSettle.mert_no, SQLCODE, sDbsError());
+            EXEC SQL CLOSE Cur_mcht_fund;
+            return ;
+        }
+
+        stFund.result_flag[0] = SETTLE_MCHT_PUTREQ;
+        EXEC SQL UPDATE TBL_MCHT_FUND SET
+            RESULT_FLAG = :stSettle.result_flag,    
+            ORDER_REQ   = :stSettle.order_req,
+            ORDER_TIME  = :stSettle.order_time,
+            UPDATE_TIME = :stSettle.create_time
+        WHERE ID = :stFund.id;
+        if(SQLCODE)
+        {
+            SYSError(RET_DATABASE, "修改(%s)商户代发数据失败, err:(%d)(%s)", stFund.id, 
+                SQLCODE, sDbsError());
+            EXEC SQL CLOSE Cur_mcht_fund;
+            return ;
+        }
+
+        if(RC_SUCC != lCallSettlePay(&stSettle))
+             break;
+
+        EXEC SQL COMMIT WORK;
+    }
+    EXEC SQL COMMIT WORK;
+    EXEC SQL CLOSE Cur_mcht_fund;
+
+    vResetUser();
+    IBPrace("处理日期(%s)商户代付清算笔数(%d), 金额(%.2f)", stFund.settle_date, lCount, dAmt);
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vCountErrFound()
+    功能描述：统计本周期商户资金
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CSettle::vUpdSettleTxn()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TMchtFund    stFund;
+    TSettleErr   stError;
+    TSettleTxn   stSettle;
+    char         szCode[20];
+    EXEC SQL END DECLARE SECTION;
+    long         lCount = 0, lSeqNo = 0;
+    GCts         *pstCts = (GCts *)pGetGloble();
+
+    memset(szCode, 0, sizeof(szCode));
+    memset(&stFund, 0, sizeof(TMchtFund));
+    memset(&stError, 0, sizeof(TSettleErr));
+    memset(&stSettle, 0, sizeof(TSettleTxn));
+    IBPgetdefstring("pay_BankSeqNo", stSettle.bank_seqno, "");
+    IBPgetdefstring("pay_BankBatNo", stSettle.bank_batch_no, "");
+    IBPgetdefstring("pay_BankCode", stSettle.bank_status, "");
+    IBPgetdefstring("pay_BankMsg", stSettle.bank_status_msg, "");
+    IBPgetdefstring("pay_BankBatchNo", stSettle.bank_batch_no, "");
+    IBPgetdefstring("pay_BankSeqNo", stSettle.bank_seqno, "");
+    IBPgetstring("pay_OrderSerial", stSettle.id, "idx");
+    if(IBPIserr())
+        return ;
+
+	sTrimAll(stSettle.id);
+    EXEC SQL SELECT * INTO :stSettle FROM TBL_SETTLE_TXN WHERE ID = :stSettle.id;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "获取清算流水(%s)失败, err:(%d)(%s)", stSettle.id,     
+         SQLCODE, sDbsError());
+       return ;
+    }
+
+    if(SETTLE_IN_FLAG_SUCC == stSettle.result_flag[0])
+    {
+        IBPwarn("交易(%s)已成功，忽略结算返回(%s)", stSettle.id, stSettle.result_flag);
+        return ;
+    }
+
+    IBPgetstring("pay_Status", stSettle.result_flag, "业务响应码");
+    IBPgetstring("pay_BussCode", stSettle.status, "业务响应码");
+    IBPgetstring("pay_BussMsg", stSettle.status_msg, "业务响应信息");
+    strncpy(stSettle.in_date, pstCts->m_szTxDate, sizeof(stSettle.in_date));
+    strncpy(stSettle.update_time, sGetCurrentTime(), sizeof(stSettle.update_time));
+    if(IBPIserr())
+        return ;
+
+    if(SETTLE_IN_FLAG_SUCC == stSettle.result_flag[0] && 
+		!strcmp(stSettle.settle_num, BATCH_REAL_SETTLE))
+        EXEC SQL DELETE FROM TBL_SETTLE_MON WHERE ID = :stSettle.id;
+
+    EXEC SQL UPDATE TBL_SETTLE_TXN SET
+        RESULT_FLAG     = :stSettle.result_flag,
+        IN_DATE         = :stSettle.in_date,    
+        STATUS          = :stSettle.status,
+        STATUS_MSG      = :stSettle.status_msg,
+        BANK_STATUS     = :stSettle.bank_status,
+        BANK_STATUS_MSG = :stSettle.bank_status_msg,
+        BANK_BATCH_NO   = :stSettle.bank_batch_no,
+        BANK_SEQNO      = :stSettle.bank_seqno,
+        UPDATE_TIME     = :stSettle.update_time
+    WHERE ID = :stSettle.id;
+    if (SQLCODE)
+    {
+        SYSError(RET_DATABASE, "更新清算流水(%s)失败, err:(%d)(%s)", stSettle.id,     
+         SQLCODE, sDbsError());
+       return ;
+    }
+
+    if(SETTLE_IN_FLAG_SUCC == stSettle.result_flag[0])
+    {
+        stFund.result_flag[0] = SETTLE_MCHT_SUCC;
+        stError.err_type[0] = ERROR_ER_SETTLE_SUCC;
+    }
+    else if(SETTLE_IN_FLAG_FAIL == stSettle.result_flag[0]) 
+    {
+        stFund.result_flag[0] = SETTLE_MCHT_ERROR;
+        stError.err_type[0] = ERROR_ER_SETTLE_FAIL;
+    }
+    else
+    {
+        stFund.result_flag[0] = SETTLE_MCHT_PUTREQ;
+        stError.err_type[0] = ERROR_ER_SETTLE_UNKOWN;
+    }
+
+    EXEC SQL UPDATE TBL_MCHT_FUND SET
+        RESULT_FLAG = :stSettle.result_flag,    
+        RESULT_DESC = :stSettle.status_msg,
+        IN_DATE     = :stSettle.in_date,    
+        PAY_TIME    = :stSettle.update_time,    
+        UPDATE_TIME = :stSettle.update_time
+    WHERE ID = :stSettle.pay_order;
+    if(SQLCODE || EFFECT_NUM != 1)
+    {
+        SYSError(RET_DATABASE, "更新商户汇总(%s)失败, err:(%d)(%s)", stSettle.mert_no, 
+            SQLCODE, sDbsError());
+        return ;
+    } 
+
+    // 处理差错TBL_SETTLE_ERR表记录
+    EXEC SQL SELECT * INTO :stError FROM TBL_SETTLE_ERR WHERE ID = :stSettle.pay_order;
+    if(SQLERR)
+    {
+        SYSError(RET_DATABASE, "查询户汇总(%s)入账失败表失败, err:(%d)(%s)", stSettle.mert_no,
+            SQLCODE, sDbsError());
+        return ;
+    }
+    else if(SQLNOTFOUND)
+    {
+        if(SETTLE_IN_FLAG_SUCC == stSettle.result_flag[0])
+            return ;
+        
+        stError.do_flag[0] = SETTLE_ERR_NOT_DEAL;
+
+        EXEC SQL INSERT INTO TBL_SETTLE_ERR (ID, SETTLE_DATE, IN_DATE, TX_DATE, SETTLE_NUM, 
+            CHANNEL_NO, BATCH_NO, TRACE_NO, DO_FLAG, ERR_TYPE, MERT_NO, MERT_NM, ORDER_REQ, 
+            ORDER_TIME, SETTLE_AMT, CURRENCY, STATUS, STATUS_MSG, BANK_STATUS, BANK_STATUS_MSG, 
+            BANK_BATCH_NO, BANK_SEQNO, RESV_PHONE, ACCT_NO, ACCT_NM, ACCT_TYPE, ACCT_BANK_NO, 
+            ACCT_BANK_NM, ACCT_ZBANK_NO, ACCT_ZBANK_NM, ACCT_ZBANK_ADDR, ACCT_ZBANK_CODE, 
+            ACCT_UNION_NO, ACCT_NET_NO, REMARK, CERT_TYPE, CERT_NO, EXT_PROPERTIES, CREATE_TIME) 
+        SELECT PAY_ORDER, SETTLE_DATE, :stSettle.in_date, TX_DATE, SETTLE_NUM, CHANNEL_NO, 
+            BATCH_NO, TRACE_NO, :stError.do_flag, :stError.err_type, MERT_NO, MERT_NM, 
+            ORDER_REQ, ORDER_TIME, SETTLE_AMT, CURRENCY, STATUS, STATUS_MSG, BANK_STATUS, 
+            BANK_STATUS_MSG, BANK_BATCH_NO, BANK_SEQNO, RESV_PHONE, ACCT_NO, ACCT_NM, 
+            ACCT_TYPE, ACCT_BANK_NO, ACCT_BANK_NM, ACCT_ZBANK_NO, ACCT_ZBANK_NM, 
+            ACCT_ZBANK_ADDR, ACCT_ZBANK_CODE, ACCT_UNION_NO, ACCT_NET_NO, REMARK, CERT_TYPE, 
+            CERT_NO, EXT_PROPERTIES, :stSettle.update_time
+        FROM TBL_SETTLE_TXN WHERE ID = :stSettle.id;
+    }
+    else
+    {
+        EXEC SQL UPDATE TBL_SETTLE_ERR SET ID = ID WHERE ID = :stSettle.id;
+        if(SQL_UD_ERR)
+        {
+            SYSError(RET_DATABASE, "锁定入账差错记录(%s)失败, err:(%d)(%s)", stSettle.id, 
+                SQLCODE, sDbsError());
+            return ;
+        }
+    
+        if(SETTLE_MCHT_SUCC == stFund.result_flag[0])
+            stError.do_flag[0] = SETTLE_ERR_SETTLE_SUCC;
+
+        EXEC SQL UPDATE TBL_SETTLE_ERR SET 
+            DO_FLAG         = :stError.do_flag,
+            ERR_TYPE        = :stError.err_type,
+            IN_DATE         = :stSettle.in_date,    
+            STATUS          = :stSettle.status,
+            STATUS_MSG      = :stSettle.status_msg,
+            BANK_STATUS     = :stSettle.bank_status,
+            BANK_STATUS_MSG = :stSettle.bank_status_msg,
+            BANK_BATCH_NO   = :stSettle.bank_batch_no,
+            BANK_SEQNO      = :stSettle.bank_seqno,
+            ORDER_REQ       = :stSettle.order_req,
+            ORDER_TIME      = :stSettle.order_time,
+            CURRENCY        = :stSettle.currency,
+            RESV_PHONE      = :stSettle.resv_phone,
+            ACCT_NO         = :stSettle.acct_no,
+            ACCT_NM         = :stSettle.acct_nm,
+            ACCT_TYPE       = :stSettle.acct_type,
+            ACCT_BANK_NO    = :stSettle.acct_bank_no,
+            ACCT_BANK_NM    = :stSettle.acct_bank_nm,
+            ACCT_ZBANK_NO   = :stSettle.acct_zbank_no,
+            ACCT_ZBANK_NM   = :stSettle.acct_zbank_nm,
+            ACCT_ZBANK_ADDR = :stSettle.acct_zbank_addr,
+            ACCT_ZBANK_CODE = :stSettle.acct_zbank_code,
+            ACCT_UNION_NO   = :stSettle.acct_union_no,
+            ACCT_NET_NO     = :stSettle.acct_net_no,
+            CERT_TYPE       = :stSettle.cert_type,
+            CERT_NO         = :stSettle.cert_no,
+            UPDATE_TIME     = :stSettle.update_time
+        WHERE ID = :stSettle.pay_order;
+    }
+    if(SQLCODE)
+    {
+		SYSError(RET_DATABASE, "操作入账失败表(%s)失败, err:(%d)(%s)", stSettle.id, 
+            SQLCODE, sDbsError());
+        return ;
+    }
+
+    return ;
+}
+
+/*************************************************************************************************
+    code end
+**************************************************************************************************/

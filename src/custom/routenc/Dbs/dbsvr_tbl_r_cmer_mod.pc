@@ -1,0 +1,427 @@
+/*
+ *  Copyright 2006, Shanghai Huateng Software Systems Co., Ltd.
+ *  All right reserved.
+ *
+ *  THIS IS UNPUBLISHED PROPRIETARY SOURCE CODE OF SHANGHAI HUATENG
+ *  SOFTWARE SYSTEMS CO., LTD.  THE CONTENTS OF THIS FILE MAY NOT
+ *  BE DISCLOSED TO THIRD PARTIES, COPIED OR DUPLICATED IN ANY FORM,
+ *  IN WHOLE OR IN PART, WITHOUT THE PRIOR WRITTEN PERMISSION OF
+ *  SHANGHAI HUATENG SOFTWARE SYSTEMS CO., LTD.
+ *
+ *  $Id$
+ *
+ *  function: table tbl_r_cmer_mod operator function
+ *
+ *  Edit History:
+ *
+ *    2017/08/15 09:18:27 by gendb
+ */
+ 
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include "dbs/dbsdef.h"
+EXEC SQL include sqlca;
+EXEC SQL include sqlda;
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+struct TBL_R_CMER_MOD_Def {
+    char       rowid[21];    /*  */
+    int        id;    /* 通道商户模型编号(自增ID) */
+    char       name[129];    /* 模型名称 */
+    char       status[2];    /* 启用状态 0-正常使用 1-不启用 2-当日已走满自动停用 */
+    int        priority;    /* 优先级 */
+    char       mcht_no[26];    /* 通道商户编号 */
+    char       chld_mcht[21];    /* 子商户编号 */
+    char       mcht_nm[257];    /* 通道商户名称 */
+    char       channel_nm[9];    /* 通道名称 alpy-支付宝 wcht-微信 wchz-中信微信 */
+    char       cha_zsnm[9];    /* 真实通道名称 */
+    double     rate;    /* 费率 */
+    double     max_fee;    /* 封顶手续费 */
+    double     min_fee;    /* 最低手续费 */
+    char       scan_mode[2];    /* 扫码模式 0-主扫 1-被扫 2-主被扫 */
+    char       credit_support[2];    /* 是否支持信用卡 0-不支持 1-支持 */
+    char       region_code[7];    /* 商户地区码 */
+    double     max_total_amout;    /* 单日最大额度 */
+    char       resv[257];    /* 预留 */
+    char       remark[1025];    /* 备注 */
+    char       direct_mcht_no[21];    /* 直连商户号 */
+    char       create_tm[15];    /* 创建时间 */
+    int        create_id;    /* 创建人 */
+    char       lupd_tm[15];    /* 最后修改时间 */
+    int        lupd_id;    /* 最后修改人 */
+} ltTBL_R_CMER_MOD;
+short s_ind;
+char  s_count[33];
+EXEC SQL END DECLARE SECTION;
+/*************************************************************************/
+/*    input : DBS_FUNC   the dbs func                                    */
+/*            The struct pointer defined in upper.                       */
+/*    return : the sqlca.sqlcode                                         */
+/*************************************************************************/
+int DbsTBL_R_CMER_MOD(int ifunc, struct TBL_R_CMER_MOD_Def *pTBL_R_CMER_MOD)
+{
+    memcpy(&ltTBL_R_CMER_MOD, pTBL_R_CMER_MOD, sizeof(ltTBL_R_CMER_MOD));
+
+    switch (ifunc) {
+    case DBS_SELECT1 :
+        EXEC SQL SELECT
+            ROWID ,
+            ID ,
+            NAME ,
+            STATUS ,
+            PRIORITY ,
+            MCHT_NO ,
+            CHLD_MCHT ,
+            MCHT_NM ,
+            CHANNEL_NM ,
+            CHA_ZSNM ,
+            RATE ,
+            MAX_FEE ,
+            MIN_FEE ,
+            SCAN_MODE ,
+            CREDIT_SUPPORT ,
+            REGION_CODE ,
+            MAX_TOTAL_AMOUT ,
+            RESV ,
+            REMARK ,
+            DIRECT_MCHT_NO ,
+            CREATE_TM ,
+            CREATE_ID ,
+            LUPD_TM ,
+            LUPD_ID
+        INTO
+            :ltTBL_R_CMER_MOD.rowid :s_ind ,
+            :ltTBL_R_CMER_MOD.id :s_ind ,
+            :ltTBL_R_CMER_MOD.name :s_ind ,
+            :ltTBL_R_CMER_MOD.status :s_ind ,
+            :ltTBL_R_CMER_MOD.priority :s_ind ,
+            :ltTBL_R_CMER_MOD.mcht_no :s_ind ,
+            :ltTBL_R_CMER_MOD.chld_mcht :s_ind ,
+            :ltTBL_R_CMER_MOD.mcht_nm :s_ind ,
+            :ltTBL_R_CMER_MOD.channel_nm :s_ind ,
+            :ltTBL_R_CMER_MOD.cha_zsnm :s_ind ,
+            :ltTBL_R_CMER_MOD.rate :s_ind ,
+            :ltTBL_R_CMER_MOD.max_fee :s_ind ,
+            :ltTBL_R_CMER_MOD.min_fee :s_ind ,
+            :ltTBL_R_CMER_MOD.scan_mode :s_ind ,
+            :ltTBL_R_CMER_MOD.credit_support :s_ind ,
+            :ltTBL_R_CMER_MOD.region_code :s_ind ,
+            :ltTBL_R_CMER_MOD.max_total_amout :s_ind ,
+            :ltTBL_R_CMER_MOD.resv :s_ind ,
+            :ltTBL_R_CMER_MOD.remark :s_ind ,
+            :ltTBL_R_CMER_MOD.direct_mcht_no :s_ind ,
+            :ltTBL_R_CMER_MOD.create_tm :s_ind ,
+            :ltTBL_R_CMER_MOD.create_id :s_ind ,
+            :ltTBL_R_CMER_MOD.lupd_tm :s_ind ,
+            :ltTBL_R_CMER_MOD.lupd_id :s_ind
+        FROM
+            tbl_r_cmer_mod
+        WHERE
+            STATUS = :ltTBL_R_CMER_MOD.status AND
+            DIRECT_MCHT_NO = :ltTBL_R_CMER_MOD.direct_mcht_no;
+
+        memcpy(pTBL_R_CMER_MOD, &ltTBL_R_CMER_MOD, sizeof(ltTBL_R_CMER_MOD));
+        break;
+
+    case DBS_SELECT2 :
+        EXEC SQL SELECT
+            ROWID ,
+            ID ,
+            NAME ,
+            STATUS ,
+            PRIORITY ,
+            MCHT_NO ,
+            CHLD_MCHT ,
+            MCHT_NM ,
+            CHANNEL_NM ,
+            CHA_ZSNM ,
+            RATE ,
+            MAX_FEE ,
+            MIN_FEE ,
+            SCAN_MODE ,
+            CREDIT_SUPPORT ,
+            REGION_CODE ,
+            MAX_TOTAL_AMOUT ,
+            RESV ,
+            REMARK ,
+            DIRECT_MCHT_NO ,
+            CREATE_TM ,
+            CREATE_ID ,
+            LUPD_TM ,
+            LUPD_ID
+        INTO
+            :ltTBL_R_CMER_MOD.rowid :s_ind ,
+            :ltTBL_R_CMER_MOD.id :s_ind ,
+            :ltTBL_R_CMER_MOD.name :s_ind ,
+            :ltTBL_R_CMER_MOD.status :s_ind ,
+            :ltTBL_R_CMER_MOD.priority :s_ind ,
+            :ltTBL_R_CMER_MOD.mcht_no :s_ind ,
+            :ltTBL_R_CMER_MOD.chld_mcht :s_ind ,
+            :ltTBL_R_CMER_MOD.mcht_nm :s_ind ,
+            :ltTBL_R_CMER_MOD.channel_nm :s_ind ,
+            :ltTBL_R_CMER_MOD.cha_zsnm :s_ind ,
+            :ltTBL_R_CMER_MOD.rate :s_ind ,
+            :ltTBL_R_CMER_MOD.max_fee :s_ind ,
+            :ltTBL_R_CMER_MOD.min_fee :s_ind ,
+            :ltTBL_R_CMER_MOD.scan_mode :s_ind ,
+            :ltTBL_R_CMER_MOD.credit_support :s_ind ,
+            :ltTBL_R_CMER_MOD.region_code :s_ind ,
+            :ltTBL_R_CMER_MOD.max_total_amout :s_ind ,
+            :ltTBL_R_CMER_MOD.resv :s_ind ,
+            :ltTBL_R_CMER_MOD.remark :s_ind ,
+            :ltTBL_R_CMER_MOD.direct_mcht_no :s_ind ,
+            :ltTBL_R_CMER_MOD.create_tm :s_ind ,
+            :ltTBL_R_CMER_MOD.create_id :s_ind ,
+            :ltTBL_R_CMER_MOD.lupd_tm :s_ind ,
+            :ltTBL_R_CMER_MOD.lupd_id :s_ind
+        FROM
+            tbl_r_cmer_mod
+        WHERE
+            ID = :ltTBL_R_CMER_MOD.id;
+
+        memcpy(pTBL_R_CMER_MOD, &ltTBL_R_CMER_MOD, sizeof(ltTBL_R_CMER_MOD));
+        break;
+
+    case DBS_LOCK1 :
+        EXEC SQL SELECT
+            ROWID ,
+            ID ,
+            NAME ,
+            STATUS ,
+            PRIORITY ,
+            MCHT_NO ,
+            CHLD_MCHT ,
+            MCHT_NM ,
+            CHANNEL_NM ,
+            CHA_ZSNM ,
+            RATE ,
+            MAX_FEE ,
+            MIN_FEE ,
+            SCAN_MODE ,
+            CREDIT_SUPPORT ,
+            REGION_CODE ,
+            MAX_TOTAL_AMOUT ,
+            RESV ,
+            REMARK ,
+            DIRECT_MCHT_NO ,
+            CREATE_TM ,
+            CREATE_ID ,
+            LUPD_TM ,
+            LUPD_ID
+        INTO
+            :ltTBL_R_CMER_MOD.rowid :s_ind ,
+            :ltTBL_R_CMER_MOD.id :s_ind ,
+            :ltTBL_R_CMER_MOD.name :s_ind ,
+            :ltTBL_R_CMER_MOD.status :s_ind ,
+            :ltTBL_R_CMER_MOD.priority :s_ind ,
+            :ltTBL_R_CMER_MOD.mcht_no :s_ind ,
+            :ltTBL_R_CMER_MOD.chld_mcht :s_ind ,
+            :ltTBL_R_CMER_MOD.mcht_nm :s_ind ,
+            :ltTBL_R_CMER_MOD.channel_nm :s_ind ,
+            :ltTBL_R_CMER_MOD.cha_zsnm :s_ind ,
+            :ltTBL_R_CMER_MOD.rate :s_ind ,
+            :ltTBL_R_CMER_MOD.max_fee :s_ind ,
+            :ltTBL_R_CMER_MOD.min_fee :s_ind ,
+            :ltTBL_R_CMER_MOD.scan_mode :s_ind ,
+            :ltTBL_R_CMER_MOD.credit_support :s_ind ,
+            :ltTBL_R_CMER_MOD.region_code :s_ind ,
+            :ltTBL_R_CMER_MOD.max_total_amout :s_ind ,
+            :ltTBL_R_CMER_MOD.resv :s_ind ,
+            :ltTBL_R_CMER_MOD.remark :s_ind ,
+            :ltTBL_R_CMER_MOD.direct_mcht_no :s_ind ,
+            :ltTBL_R_CMER_MOD.create_tm :s_ind ,
+            :ltTBL_R_CMER_MOD.create_id :s_ind ,
+            :ltTBL_R_CMER_MOD.lupd_tm :s_ind ,
+            :ltTBL_R_CMER_MOD.lupd_id :s_ind
+        FROM
+            tbl_r_cmer_mod
+        WHERE
+            STATUS = :ltTBL_R_CMER_MOD.status AND
+            DIRECT_MCHT_NO = :ltTBL_R_CMER_MOD.direct_mcht_no
+        for update;
+
+        memcpy(pTBL_R_CMER_MOD, &ltTBL_R_CMER_MOD, sizeof(ltTBL_R_CMER_MOD));
+        break;
+
+    case DBS_LOCK2 :
+        EXEC SQL SELECT
+            ROWID ,
+            ID ,
+            NAME ,
+            STATUS ,
+            PRIORITY ,
+            MCHT_NO ,
+            CHLD_MCHT ,
+            MCHT_NM ,
+            CHANNEL_NM ,
+            CHA_ZSNM ,
+            RATE ,
+            MAX_FEE ,
+            MIN_FEE ,
+            SCAN_MODE ,
+            CREDIT_SUPPORT ,
+            REGION_CODE ,
+            MAX_TOTAL_AMOUT ,
+            RESV ,
+            REMARK ,
+            DIRECT_MCHT_NO ,
+            CREATE_TM ,
+            CREATE_ID ,
+            LUPD_TM ,
+            LUPD_ID
+        INTO
+            :ltTBL_R_CMER_MOD.rowid :s_ind ,
+            :ltTBL_R_CMER_MOD.id :s_ind ,
+            :ltTBL_R_CMER_MOD.name :s_ind ,
+            :ltTBL_R_CMER_MOD.status :s_ind ,
+            :ltTBL_R_CMER_MOD.priority :s_ind ,
+            :ltTBL_R_CMER_MOD.mcht_no :s_ind ,
+            :ltTBL_R_CMER_MOD.chld_mcht :s_ind ,
+            :ltTBL_R_CMER_MOD.mcht_nm :s_ind ,
+            :ltTBL_R_CMER_MOD.channel_nm :s_ind ,
+            :ltTBL_R_CMER_MOD.cha_zsnm :s_ind ,
+            :ltTBL_R_CMER_MOD.rate :s_ind ,
+            :ltTBL_R_CMER_MOD.max_fee :s_ind ,
+            :ltTBL_R_CMER_MOD.min_fee :s_ind ,
+            :ltTBL_R_CMER_MOD.scan_mode :s_ind ,
+            :ltTBL_R_CMER_MOD.credit_support :s_ind ,
+            :ltTBL_R_CMER_MOD.region_code :s_ind ,
+            :ltTBL_R_CMER_MOD.max_total_amout :s_ind ,
+            :ltTBL_R_CMER_MOD.resv :s_ind ,
+            :ltTBL_R_CMER_MOD.remark :s_ind ,
+            :ltTBL_R_CMER_MOD.direct_mcht_no :s_ind ,
+            :ltTBL_R_CMER_MOD.create_tm :s_ind ,
+            :ltTBL_R_CMER_MOD.create_id :s_ind ,
+            :ltTBL_R_CMER_MOD.lupd_tm :s_ind ,
+            :ltTBL_R_CMER_MOD.lupd_id :s_ind
+        FROM
+            tbl_r_cmer_mod
+        WHERE
+            ID = :ltTBL_R_CMER_MOD.id
+        for update;
+
+        memcpy(pTBL_R_CMER_MOD, &ltTBL_R_CMER_MOD, sizeof(ltTBL_R_CMER_MOD));
+        break;
+
+    case DBS_UPDATE1 :
+        EXEC SQL UPDATE
+            tbl_r_cmer_mod
+        SET
+            ID                      = :ltTBL_R_CMER_MOD.id ,
+            NAME                    = :ltTBL_R_CMER_MOD.name ,
+            STATUS                  = :ltTBL_R_CMER_MOD.status ,
+            PRIORITY                = :ltTBL_R_CMER_MOD.priority ,
+            MCHT_NO                 = :ltTBL_R_CMER_MOD.mcht_no ,
+            CHLD_MCHT               = :ltTBL_R_CMER_MOD.chld_mcht ,
+            MCHT_NM                 = :ltTBL_R_CMER_MOD.mcht_nm ,
+            CHANNEL_NM              = :ltTBL_R_CMER_MOD.channel_nm ,
+            CHA_ZSNM                = :ltTBL_R_CMER_MOD.cha_zsnm ,
+            RATE                    = :ltTBL_R_CMER_MOD.rate ,
+            MAX_FEE                 = :ltTBL_R_CMER_MOD.max_fee ,
+            MIN_FEE                 = :ltTBL_R_CMER_MOD.min_fee ,
+            SCAN_MODE               = :ltTBL_R_CMER_MOD.scan_mode ,
+            CREDIT_SUPPORT          = :ltTBL_R_CMER_MOD.credit_support ,
+            REGION_CODE             = :ltTBL_R_CMER_MOD.region_code ,
+            MAX_TOTAL_AMOUT         = :ltTBL_R_CMER_MOD.max_total_amout ,
+            RESV                    = :ltTBL_R_CMER_MOD.resv ,
+            REMARK                  = :ltTBL_R_CMER_MOD.remark ,
+            DIRECT_MCHT_NO          = :ltTBL_R_CMER_MOD.direct_mcht_no ,
+            CREATE_TM               = :ltTBL_R_CMER_MOD.create_tm ,
+            CREATE_ID               = :ltTBL_R_CMER_MOD.create_id ,
+            LUPD_TM                 = :ltTBL_R_CMER_MOD.lupd_tm ,
+            LUPD_ID                 = :ltTBL_R_CMER_MOD.lupd_id
+        WHERE
+            ROWID = :ltTBL_R_CMER_MOD.rowid;
+
+        break;
+
+    case DBS_INSERT :
+        EXEC SQL INSERT INTO tbl_r_cmer_mod (
+            ID ,
+            NAME ,
+            STATUS ,
+            PRIORITY ,
+            MCHT_NO ,
+            CHLD_MCHT ,
+            MCHT_NM ,
+            CHANNEL_NM ,
+            CHA_ZSNM ,
+            RATE ,
+            MAX_FEE ,
+            MIN_FEE ,
+            SCAN_MODE ,
+            CREDIT_SUPPORT ,
+            REGION_CODE ,
+            MAX_TOTAL_AMOUT ,
+            RESV ,
+            REMARK ,
+            DIRECT_MCHT_NO ,
+            CREATE_TM ,
+            CREATE_ID ,
+            LUPD_TM ,
+            LUPD_ID
+        ) VALUES (
+            :ltTBL_R_CMER_MOD.id ,
+            :ltTBL_R_CMER_MOD.name ,
+            :ltTBL_R_CMER_MOD.status ,
+            :ltTBL_R_CMER_MOD.priority ,
+            :ltTBL_R_CMER_MOD.mcht_no ,
+            :ltTBL_R_CMER_MOD.chld_mcht ,
+            :ltTBL_R_CMER_MOD.mcht_nm ,
+            :ltTBL_R_CMER_MOD.channel_nm ,
+            :ltTBL_R_CMER_MOD.cha_zsnm ,
+            :ltTBL_R_CMER_MOD.rate ,
+            :ltTBL_R_CMER_MOD.max_fee ,
+            :ltTBL_R_CMER_MOD.min_fee ,
+            :ltTBL_R_CMER_MOD.scan_mode ,
+            :ltTBL_R_CMER_MOD.credit_support ,
+            :ltTBL_R_CMER_MOD.region_code ,
+            :ltTBL_R_CMER_MOD.max_total_amout ,
+            :ltTBL_R_CMER_MOD.resv ,
+            :ltTBL_R_CMER_MOD.remark ,
+            :ltTBL_R_CMER_MOD.direct_mcht_no ,
+            :ltTBL_R_CMER_MOD.create_tm ,
+            :ltTBL_R_CMER_MOD.create_id ,
+            :ltTBL_R_CMER_MOD.lupd_tm ,
+            :ltTBL_R_CMER_MOD.lupd_id
+        );
+        break;
+
+    default :
+        return DB_DBSFUNCERR;
+    }
+
+    return sqlca.sqlcode;
+}
+
+
+int DbsCntTBL_R_CMER_MOD(int ifunc, struct TBL_R_CMER_MOD_Def *pTBL_R_CMER_MOD, char *psCount, int nCntSize)
+{
+    memcpy(&ltTBL_R_CMER_MOD, pTBL_R_CMER_MOD, sizeof(ltTBL_R_CMER_MOD));
+
+    memset(s_count, 0, sizeof(s_count));
+
+    switch (ifunc) {
+    default :
+        return DB_DBSFUNCERR;
+    }
+
+    return sqlca.sqlcode;
+}
+
+
+int DbsStatTBL_R_CMER_MOD(int ifunc, struct TBL_R_CMER_MOD_Def *pTBL_R_CMER_MOD, char *psCount, int nCntSize)
+{
+    memcpy(&ltTBL_R_CMER_MOD, pTBL_R_CMER_MOD, sizeof(ltTBL_R_CMER_MOD));
+
+    memset(s_count, 0, sizeof(s_count));
+
+    switch (ifunc) {
+    default :
+        return DB_DBSFUNCERR;
+    }
+
+    return sqlca.sqlcode;
+}

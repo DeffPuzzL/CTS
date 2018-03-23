@@ -1,0 +1,1362 @@
+/**************************************************************************************************
+    文 件 名：accout_fund.pcpp
+    代码作者：DeffPuzzL
+    编写版本：
+    创建日期：2017-11-23
+    功能描述：账户实现模块
+ **************************************************************************************************/
+#include    "accout_fund.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+#include    "tbl_order_err.h"
+#include    "tbl_algo_dtls.h"
+#include    "tbl_settle_txn.h"
+#include    "tbl_settle_err.h"
+#include    "tbl_account_detail.h"
+#include    "tbl_cash_account.h"
+#include    "tbl_channel_account.h"
+EXEC SQL END DECLARE SECTION;
+
+/**************************************************************************************************
+    方法定义
+ **************************************************************************************************/
+CAccount::stEvent CAccount::m_stEvent[] =
+{
+    {"check",           &CAccount::vCheckAlgoTxn },
+    {"account",         &CAccount::vAlgoAccount },
+    {"erralgo",         &CAccount::vAlgoErrorTxn },
+    {"paychk",          &CAccount::vPaySettleChk },
+    {"paytxn",          &CAccount::vPaySettleTxn },
+    {"result",          &CAccount::vUpdateResult },
+    {"syntxn",          &CAccount::vSynSettleTxn },
+    {"balachk",         &CAccount::vQueryBalance },
+    {"getasyn",         &CAccount::vPopAsynIndex },
+    {"reverse",         &CAccount::vReverseSettle },
+    {"mainbal",         &CAccount::vMainActBalace },
+    { "", NULL }
+};
+
+/**************************************************************************************************
+    函 数 名：CAccount()
+    功能描述：构造函数
+    返回说明：
+ **************************************************************************************************/
+CAccount::CAccount()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：~CAccount()
+    功能描述：析构函数
+    返回说明：
+ **************************************************************************************************/
+CAccount::~CAccount()
+{
+
+
+}
+
+/**************************************************************************************************
+    函 数 名：lRunObject(char* in_szClass, char* in_szAction)
+    功能描述：运行类中的方法
+    返回说明：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ **************************************************************************************************/
+long    CAccount::lRunObject(char *in_szClass, char *in_szAction)
+{
+    int     i = 0;
+    char    *p, szAction[256];
+
+    memset(szAction, 0, sizeof(szAction));
+
+    if ((p = strstr(in_szAction, "__")) != NULL)
+        strncpy(szAction, in_szAction, p - in_szAction);
+    else
+        strcpy(szAction, in_szAction);
+
+    while (0 != strcmp(m_stEvent[i].m_szName, ""))
+    {
+        if (0 == strcmp(m_stEvent[i].m_szName, szAction))
+        {
+            (this->*m_stEvent[i].m_pEvent)();
+            return RC_SUCC;
+        }
+
+        i++;
+    }
+
+    SYSError(RET_SYSTEM, "组件(%s)的事件(%s)没注册", in_szClass, in_szAction);
+    return RC_FAIL;
+}
+
+/**************************************************************************************************
+    函 数 名：vAccountReverse(TSettleTxn *pstSettle)
+    功能描述：冲正账户金额
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CAccount::vAccountReverse(TSettleTxn *pstSettle)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+	char			  szFund[2];
+    TAccountDetail    stDetail;
+	double            dTotalFee, dTotalAmt;
+    EXEC SQL END DECLARE SECTION;
+
+	memset(szFund, 0, sizeof(szFund));
+    memset(&stDetail, 0, sizeof(TAccountDetail));
+	szFund[0] = ACCOUNT_FLG_RESV;
+    stDetail.trace_no = lGetSeqNo();
+    stDetail.dc_flag[0] = ACCOUNT_FLAG_D;
+    stDetail.app_type[0] = ACCOUNT_MERT_NO;
+    stDetail.fund_flag[0] = ACCOUNT_FLG_NMAL;
+    memcpy(stDetail.settle_date, sGetActDate(), 8);
+    memcpy(stDetail.create_time, sGetCurrentTime(), 14);
+    EXEC SQL UPDATE TBL_ACCOUNT_DETAIL SET 
+        FUND_FLAG   = :szFund,
+        UPDATE_TIME = :stDetail.create_time
+    WHERE SETTLE_DATE = :stDetail.settle_date AND TRACE_NO = :stDetail.trace_no AND 
+		FUND_FLAG = :stDetail.fund_flag AND dc_flag = :stDetail.dc_flag 
+	RETURNING in_type INTO :stDetail.in_type;
+	if(SQLCODE)
+	{
+        SYSError(RET_DATABASE, "更新原始(%s)(%d)入账流水失败, %s", stDetail.settle_date, 
+			stDetail.trace_no, sDbsError());
+		return ;
+	}
+
+    dTotalFee = pstSettle->settle_fee;
+    dTotalAmt = pstSettle->settle_amt;
+    stDetail.dc_flag[0] = ACCOUNT_FLAG_C;
+    stDetail.app_type[0] = ACCOUNT_MERT_NO;
+    strcpy(stDetail.in_illust, "账户资金冲正");
+    memcpy(stDetail.apply_date, stDetail.settle_date, 8);
+    strncpy(stDetail.apply_no, pstSettle->id, sizeof(stDetail.apply_no));
+    strncpy(stDetail.app_no, pstSettle->app_no, sizeof(stDetail.app_no));
+	stDetail.in_amt = pstSettle->settle_amt + pstSettle->settle_fee;
+
+    EXEC SQL INSERT INTO TBL_ACCOUNT_DETAIL (ID, SETTLE_DATE, TRACE_NO, APP_TYPE, APP_NO, 
+        DC_FLAG, FUND_FLAG, IN_TYPE, IN_AMT, IN_ILLUST, APPLY_DATE, APPLY_NO, CREATE_TIME)
+    SELECT SEQ_ACCOUNT_DETAIL.NEXTVAL, :stDetail.app_type, :stDetail.app_no,
+        :stDetail.settle_date, :stDetail.dc_flag, :stDetail.in_type, :stDetail.in_amt,
+        :stDetail.in_illust, :stDetail.apply_no, :stDetail.create_time FROM DUAL;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "新增账户资金明细(%s)失败, %s", stDetail.app_no, sDbsError());
+        return ;
+    }
+
+    if(ACCOUNT_TRANS_AMT == stDetail.in_type[0])
+	{
+        EXEC SQL UPDATE TBL_CASH_ACCOUNT SET
+            TOTAL_FEE   = TOTAL_FEE - :dTotalFee,
+            TOTAL_PAY   = TOTAL_PAY - :dTotalAmt,
+            TRANS_AMT   = TRANS_AMT + :stDetail.in_amt,
+            UPDATE_TIME = :stDetail.create_time
+        WHERE APP_TYPE = :stDetail.app_type AND APP_NO = :stDetail.app_no;
+	}
+	else if(ACCOUNT_BALAN_AMT == stDetail.in_type[0])
+	{
+        EXEC SQL UPDATE TBL_CASH_ACCOUNT SET
+            TOTAL_FEE   = TOTAL_FEE - :dTotalFee,
+            TOTAL_PAY   = TOTAL_PAY - :dTotalAmt,
+            BALANCE_AMT = BALANCE_AMT + :stDetail.in_amt,    
+            UPDATE_TIME = :stDetail.create_time
+        WHERE APP_TYPE = :stDetail.app_type AND APP_NO = :stDetail.app_no;
+	}
+	else
+    {
+        SYSError(RET_DATABASE, "未知账户(%s)状态(%s)状态", stDetail.app_no, stDetail.in_type);
+		return ;
+    }
+
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "更新商户(%s)账户失败, %s", stDetail.app_no, sDbsError());
+        return ;
+    }
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vErrorAlgoAct(TAlgoDtls *pstAlgoDtl, char *pszIllust)
+    功能描述：登记入账金额
+    返回说明：
+        无
+ **************************************************************************************************/
+void	CAccount::vErrorAlgoAct(TAlgoDtls *pstAlgoDtl, char *pszIllust)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TAccountDetail    stDetail;
+    double            dTotalAmt, dTotalFee;
+    EXEC SQL END DECLARE SECTION;
+
+	dTotalAmt = pstAlgoDtl->tx_amt; 
+	dTotalFee = pstAlgoDtl->fee_amt;
+    memset(&stDetail, 0, sizeof(TAccountDetail));
+	stDetail.trace_no = lGetSeqNo();
+    stDetail.dc_flag[0] = ACCOUNT_FLAG_C;
+    stDetail.in_type[0] = ACCOUNT_TRANS_AMT;
+    stDetail.app_type[0] = ACCOUNT_MERT_NO;
+    stDetail.fund_flag[0] = ACCOUNT_FLG_NMAL;
+	memcpy(stDetail.settle_date, sGetActDate(), 8);
+	memcpy(stDetail.apply_date, stDetail.settle_date, 8);
+	strncpy(stDetail.apply_no, pstAlgoDtl->id, sizeof(stDetail.apply_no));
+	strncpy(stDetail.in_illust, pszIllust, sizeof(stDetail.in_illust));
+	strncpy(stDetail.app_no, pstAlgoDtl->mert_no, sizeof(stDetail.app_no));
+	memcpy(stDetail.create_time, pstAlgoDtl->create_time, 14);
+	stDetail.in_amt = pstAlgoDtl->tx_amt - pstAlgoDtl->fee_amt;
+	
+    EXEC SQL INSERT INTO TBL_ACCOUNT_DETAIL (ID, SETTLE_DATE, TRACE_NO, APP_TYPE, APP_NO, 
+        DC_FLAG, FUND_FLAG, IN_TYPE, IN_AMT, IN_ILLUST, APPLY_DATE, APPLY_NO, CREATE_TIME) 
+	SELECT SEQ_ACCOUNT_DETAIL.NEXTVAL, :stDetail.settle_date, :stDetail.trace_no, 
+        :stDetail.app_type, :stDetail.app_no, :stDetail.dc_flag, :stDetail.fund_flag, 
+        :stDetail.in_type, :stDetail.in_amt, :stDetail.in_illust, :stDetail.apply_date, 
+		:stDetail.apply_no, :stDetail.create_time FROM DUAL;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "新增账户资金变动明细(%s)失败, %s", stDetail.app_no, sDbsError());
+        return ;
+    }
+
+    EXEC SQL UPDATE TBL_CASH_ACCOUNT SET
+		TOTAL_AMT   = TOTAL_AMT + :dTotalAmt,
+		TOTAL_FEE   = TOTAL_FEE + :dTotalFee,
+        TRANS_AMT   = TRANS_AMT + :stDetail.in_amt,    
+        FREEZE_AMT  = FREEZE_AMT - :dTotalAmt,
+        UPDATE_TIME = :stDetail.create_time
+    WHERE APP_TYPE  = :stDetail.app_type AND APP_NO = :stDetail.app_no;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "解冻商户(%s)账户失败, %s", stDetail.app_no, sDbsError());
+        return ;
+    }
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：lAlgoActChange(TAlgoDtls *pstAlgoDtl, char cType, char *pszIllust)
+    功能描述：登记入账金额
+    返回说明：
+        无
+ **************************************************************************************************/
+long	CAccount::lAlgoActChange(TAlgoDtls *pstAlgoDtl, char cType, char *pszIllust)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TAccountDetail    stDetail;
+    double            dTotalAmt, dTotalFee;
+    EXEC SQL END DECLARE SECTION;
+
+	dTotalAmt = pstAlgoDtl->tx_amt; 
+	dTotalFee = pstAlgoDtl->fee_amt;
+    memset(&stDetail, 0, sizeof(TAccountDetail));
+	stDetail.trace_no = lGetSeqNo();
+    stDetail.in_type[0]  = cType;
+    stDetail.dc_flag[0] = ACCOUNT_FLAG_C;
+    stDetail.app_type[0] = ACCOUNT_MERT_NO;
+	stDetail.fund_flag[0] = ACCOUNT_FLG_NMAL;
+	memcpy(stDetail.settle_date, sGetActDate(), 8);
+	memcpy(stDetail.apply_date, stDetail.settle_date, 8);
+	strncpy(stDetail.app_no, pstAlgoDtl->mert_no, sizeof(stDetail.app_no));
+	strncpy(stDetail.apply_no, pstAlgoDtl->id, sizeof(stDetail.apply_no));
+	strncpy(stDetail.in_illust, pszIllust, sizeof(stDetail.in_illust));
+	memcpy(stDetail.create_time, pstAlgoDtl->create_time, 14);
+	stDetail.in_amt = pstAlgoDtl->tx_amt - pstAlgoDtl->fee_amt;
+	
+    EXEC SQL INSERT INTO TBL_ACCOUNT_DETAIL (ID, SETTLE_DATE, TRACE_NO, APP_TYPE, APP_NO,
+        DC_FLAG, FUND_FLAG, IN_TYPE, IN_AMT, IN_ILLUST, APPLY_DATE, APPLY_NO, CREATE_TIME)
+    SELECT SEQ_ACCOUNT_DETAIL.NEXTVAL, :stDetail.settle_date, :stDetail.trace_no,
+        :stDetail.app_type, :stDetail.app_no, :stDetail.dc_flag, :stDetail.fund_flag,
+        :stDetail.in_type, :stDetail.in_amt, :stDetail.in_illust, :stDetail.apply_date,
+        :stDetail.apply_no, :stDetail.create_time FROM DUAL;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "新增资金变动明细(%s)失败, %s", stDetail.app_no, sDbsError());
+        return RC_FAIL;
+    }
+
+    switch(stDetail.in_type[0])
+    {
+    case ACCOUNT_TRANS_AMT:
+        EXEC SQL UPDATE TBL_CASH_ACCOUNT SET
+			TOTAL_AMT   = TOTAL_AMT + :dTotalAmt,
+			TOTAL_FEE   = TOTAL_FEE + :dTotalFee,
+            TRANS_AMT   = TRANS_AMT + :stDetail.in_amt,    
+            UPDATE_TIME = :stDetail.create_time
+        WHERE APP_TYPE  = :stDetail.app_type AND APP_NO = :stDetail.app_no;
+        break;
+    case ACCOUNT_FREEZ_AMT:
+        EXEC SQL UPDATE TBL_CASH_ACCOUNT SET
+            FREEZE_AMT  = FREEZE_AMT + :dTotalAmt,
+            UPDATE_TIME = :stDetail.create_time
+        WHERE APP_TYPE  = :stDetail.app_type AND APP_NO = :stDetail.app_no;
+        break;
+    default:
+        SYSError(RET_DATABASE, "未知更新账户(%s)状态(%s)状态", stDetail.app_no, stDetail.in_type);
+		return RC_FAIL;
+    }
+
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "更新商户(%s)账户失败, %s", stDetail.app_no, sDbsError());
+        return RC_FAIL;
+    }
+
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：vPayActChange(char chDc, char cType, double amt, char *pszMert)
+    功能描述：登记入账金额
+    返回说明：
+        无
+ **************************************************************************************************/
+void	CAccount::vPayActChange(TSettleTxn *pstSettle, char cDc, char *pszIllust)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TAccountDetail    stDetail;
+    double            dTotalFee, dTotalAmt;
+    EXEC SQL END DECLARE SECTION;
+
+	dTotalFee = pstSettle->settle_fee;
+	dTotalAmt = pstSettle->settle_amt;
+    memset(&stDetail, 0, sizeof(TAccountDetail));
+    stDetail.dc_flag[0] = cDc;
+	stDetail.trace_no = lGetSeqNo();
+    stDetail.in_type[0]  = ACCOUNT_TRANS_AMT;
+    stDetail.app_type[0] = ACCOUNT_MERT_NO;
+    stDetail.fund_flag[0] = ACCOUNT_FLG_NMAL;
+    memcpy(stDetail.settle_date, sGetActDate(), 8);
+    memcpy(stDetail.apply_date, stDetail.settle_date, 8);
+	strncpy(stDetail.app_no, pstSettle->app_no, sizeof(stDetail.app_no));
+	strncpy(stDetail.apply_no, pstSettle->id, sizeof(stDetail.apply_no));
+	strncpy(stDetail.in_illust, pszIllust, sizeof(stDetail.in_illust));
+	memcpy(stDetail.create_time, pstSettle->create_time, 14);
+	stDetail.in_amt = pstSettle->settle_amt + pstSettle->settle_fee;
+    if(stDetail.in_amt <= 0.0005)
+    {
+        SYSError(RET_SYSTEM, "账户(%s)入账金额非法(%.3f)", stDetail.app_no, stDetail.in_amt);
+        return ;
+    }
+
+    EXEC SQL INSERT INTO TBL_ACCOUNT_DETAIL (ID, SETTLE_DATE, TRACE_NO, APP_TYPE, APP_NO,
+        DC_FLAG, FUND_FLAG, IN_TYPE, IN_AMT, IN_ILLUST, APPLY_DATE, APPLY_NO, CREATE_TIME)
+    SELECT SEQ_ACCOUNT_DETAIL.NEXTVAL, :stDetail.settle_date, :stDetail.trace_no,
+        :stDetail.app_type, :stDetail.app_no, :stDetail.dc_flag, :stDetail.fund_flag,
+        :stDetail.in_type, :stDetail.in_amt, :stDetail.in_illust, :stDetail.apply_date,
+        :stDetail.apply_no, :stDetail.create_time FROM DUAL;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "新增账户资金变动明细(%s)失败, %s", stDetail.app_no, sDbsError());
+        return ;
+    }
+
+    if(ACCOUNT_FLAG_D == stDetail.dc_flag[0]) // 贷
+	{
+        EXEC SQL UPDATE TBL_CASH_ACCOUNT SET
+        	TOTAL_FEE   = TOTAL_FEE + :dTotalFee,
+        	TOTAL_PAY   = TOTAL_PAY + :dTotalAmt,
+            TRANS_AMT   = TRANS_AMT - :stDetail.in_amt,    
+            UPDATE_TIME = :stDetail.create_time
+        WHERE APP_TYPE  = :stDetail.app_type AND APP_NO = :stDetail.app_no;
+	}
+	else 
+	{
+    	EXEC SQL UPDATE TBL_CASH_ACCOUNT SET
+			TOTAL_FEE   = TOTAL_FEE - :dTotalFee,
+			TOTAL_PAY   = TOTAL_PAY - :dTotalAmt,
+       		TRANS_AMT   = TRANS_AMT + :stDetail.in_amt,    
+        	UPDATE_TIME = :stDetail.create_time
+    	WHERE APP_TYPE  = :stDetail.app_type AND APP_NO = :stDetail.app_no;
+	}
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "更新商户(%s)账户失败, %s", stDetail.app_no, sDbsError());
+        return ;
+    }
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：dGetAlgoFee(dbDiscAlgo *pstAlgo, double dTxAmt, long *plFeeType)
+    功能描述：计算交易金额对应档费率
+    返回说明：
+        无
+ **************************************************************************************************/
+double  CAccount::dGetAlgoFee(dbDiscAlgo *pstAlgo, double dTxAmt, long *plFeeType)
+{
+    double dFee = 0.00, dCalFee = 0.00;
+
+    if (DISC_ALGO_FIXED == pstAlgo->flag)              // 按笔(固定)收费
+    {
+        *plFeeType = 4;
+        dCalFee = pstAlgo->fee_value;
+    }
+    else if (DISC_ALGO_RATE == pstAlgo->flag)          // 按比收费
+    {
+        *plFeeType = 1;                              // 1-扣率类
+        dFee = dTxAmt * pstAlgo->fee_value / 100;
+        if (pstAlgo->min_fee >= dFee)                  // 取最小最大区间的费用
+            dFee = pstAlgo->min_fee;
+
+        if (pstAlgo->max_fee > 0)
+        {
+            if (pstAlgo->max_fee <= dFee)
+            {
+                *plFeeType = 3;                      // 封顶类并达到封顶值
+                dFee = pstAlgo->max_fee;
+            }
+            else
+            {
+                *plFeeType = 2;                      // 固定手续费
+            }
+        }
+        dCalFee = dFee;
+    }
+    else
+    {
+        *plFeeType = 0;                              //  其他方式未定，无费率处理
+        dCalFee = 0.00;
+    }
+
+    return dCalFee;
+}
+
+/**************************************************************************************************
+    函 数 名：nCalculateFee(long lNum, char *pszDisGrp, TAlgoDtls *pstAlgoDtl)
+    功能描述：获取当前交易费率
+    返回说明：
+        无
+ **************************************************************************************************/
+long    CAccount::nCalculateFee(long lNum, char *pszDisGrp, TAlgoDtls *pstAlgoDtl)
+{
+	long		i;
+    dbDiscAlgo  stAlgo;
+
+	for(i = 0, pstAlgoDtl->fee_amt = 0.00; i < lNum; i ++)
+	{
+		memset(stAlgo.disc_id, 0, sizeof(stAlgo.disc_id));
+		strncpy(stAlgo.disc_id, sGetValueByIdx(pszDisGrp, ",", i + 1), sizeof(stAlgo.disc_id) - 1);
+
+	    if(RC_SUCC != lGetDiscAlgo(stAlgo.disc_id, pstAlgoDtl->tx_amt, pstAlgoDtl->card_type, &stAlgo))
+        {
+            IBPerror("获取费率模型(%s)失败, %s", stAlgo.disc_id, sGetError());
+            return RC_FAIL;
+        }
+
+        pstAlgoDtl->fee_amt += dGetAlgoFee(&stAlgo, pstAlgoDtl->tx_amt, &pstAlgoDtl->fee_type);
+	}
+
+    pstAlgoDtl->fee_amt = Round(pstAlgoDtl->fee_amt, 2);
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：vFillAlgoDtl(TAlgoDtls *pstAlgo)
+    功能描述：填充清分数据
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CAccount::vFillAlgoDtl(TAlgoDtls *pstAlgo)
+{
+    IBPgetstring("id", pstAlgo->id, "id");
+    IBPgetstring("tx_date", pstAlgo->tx_date, "tx_date");
+    IBPgetstring("tx_time", pstAlgo->tx_time, "tx_time");
+    IBPgetstring("channel_no", pstAlgo->channel_no, "channel_no");
+    IBPgetstring("pay_type", pstAlgo->pay_type, "pay_type");
+    IBPgetstring("seq_order", pstAlgo->seq_order, "seq_order");
+    IBPgetdouble("tx_amt", &pstAlgo->tx_amt, "tx_amt");
+    IBPgetlong("card_type", &pstAlgo->card_type, "card_type");
+    IBPgetlong("disc_cycle", &pstAlgo->disc_cycle, "disc_cycle");
+    IBPgetstring("app_code", pstAlgo->app_code, "app_code");
+    IBPgetstring("mert_no", pstAlgo->mert_no, "mert_no");
+    IBPgetstring("mert_nm", pstAlgo->mert_nm, "mert_nm");
+    IBPgetstring("brh_code", pstAlgo->brh_code, "brh_code");
+    IBPgetstring("product_code", pstAlgo->product_code, "product_code");
+    IBPgetstring("order_id", pstAlgo->order_id, "order_id");
+    memcpy(pstAlgo->algo_date, sGetActDate(), sizeof(pstAlgo->algo_date) - 1);
+    memcpy(pstAlgo->settle_num, SETTLE_PAY_REALTM, sizeof(pstAlgo->settle_num) - 1);
+    memcpy(pstAlgo->create_time, sGetCurrentTime(), sizeof(pstAlgo->create_time) - 1 );
+
+    IBPgetdefstring("stlm_date", pstAlgo->stlm_date, "");
+    IBPgetdefstring("bank_code", pstAlgo->bank_code, "");
+    IBPgetdefstring("bank_card_no", pstAlgo->bank_card_no, "");
+    IBPgetdefstring("user_name", pstAlgo->user_name, "");
+    IBPgetdefstring("bank_acc_type", pstAlgo->bank_acc_type, "");
+    IBPgetdefstring("bank_full_name", pstAlgo->bank_full_name, "");
+    IBPgetdefstring("bank_branch_name", pstAlgo->bank_branch_name, "");
+    IBPgetdefstring("bank_areacode", pstAlgo->bank_areacode, "");
+    IBPgetdefstring("cnaps_no", pstAlgo->cnaps_no, "");
+    IBPgetdefstring("cnaps_bankno", pstAlgo->cnaps_bankno, "");
+    IBPgetdefstring("currency", pstAlgo->currency, "CNY");
+    IBPgetdefstring("cert_type", pstAlgo->cert_type, "");
+    IBPgetdefstring("cert_no", pstAlgo->cert_no, "");
+    IBPgetdefstring("mobile_no", pstAlgo->mobile_no, "");
+    IBPgetdefstring("product_name", pstAlgo->product_name, "");
+}
+
+/**************************************************************************************************
+    函 数 名：lAlgoDtlTxn(TAlgoDtls *pstAlgoDtl)
+    功能描述：
+    返回说明：
+        RC_SUCC
+        RC_FAIL
+ **************************************************************************************************/
+long    CAccount::lAlgoDtlTxn(TAlgoDtls *pstAlgoDtl)
+{
+    dbMchtBase  stBase;
+    dbMchtProd  stProd;
+
+    IBPrace("开始处理(%s)商户(%s)交易金额(%.2f)清分", pstAlgoDtl->id, pstAlgoDtl->mert_no, 
+		pstAlgoDtl->tx_amt);
+    if(RC_SUCC != lGetMchtBase(&stBase, pstAlgoDtl->mert_no))
+    {
+        SYSError(RET_SYSTEM, "获取商户(%s)信息失败, err:(%s)", pstAlgoDtl->mert_no, sGetError());
+        return RC_FAIL;
+    }
+
+    if(strcmp(stBase.mcht_status, "ZC"))
+    {
+        SYSError(RET_SYSTEM, "商户(%s)状态(%s)异常, err:(%s)", pstAlgoDtl->mert_no,
+            stBase.mcht_status, sGetError());
+        return RC_FAIL;
+    }
+
+    //    获取商户产品费率
+    if(RC_SUCC != lGetMchtPord(&stProd, pstAlgoDtl->product_code))
+    {
+        SYSError(RET_SYSTEM, "获取商户(%s)(%s)信息失败, err:(%s)", pstAlgoDtl->mert_no,
+            pstAlgoDtl->product_code, sGetError());
+        return RC_FAIL;
+    }
+
+	//	非代扣或者不是代付清算模式(本模块仅仅支持代付且代付清算模式)
+	if(strcmp(stProd.buss_type, "QB") || 2 != stProd.settle_model)
+	{
+        SYSError(RET_SYSTEM, "产品(%s)编号不匹配", pstAlgoDtl->product_code);
+		return RC_FAIL;
+	}
+
+    pstAlgoDtl->brh_flag[0]  = ALGO_BRH_FLAG_NULL;
+    pstAlgoDtl->mcht_flag[0] = ALGO_MCHT_FLAG_SUCC;
+    memcpy(pstAlgoDtl->disc_id, stProd.dis_groups, sizeof(pstAlgoDtl->disc_id) - 1);
+	strncpy(pstAlgoDtl->pay_kind, stProd.pay_kind, sizeof(pstAlgoDtl->pay_kind) - 1);
+    if(RC_SUCC != nCalculateFee(stProd.disc_num, stProd.dis_groups, pstAlgoDtl))
+    {
+        SYSError(RET_SYSTEM, "记录商户(%s)(%s)手续费失败, err:(%s)", pstAlgoDtl->mert_no,
+            pstAlgoDtl->disc_id, sGetError());
+        return RC_FAIL;
+    }
+
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：vAlgoErrorTxn()
+    功能描述：
+    返回说明：
+        无
+ **************************************************************************************************/
+void	CAccount::vAlgoErrorTxn()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TAlgoDtls       stAlgoDtl;
+    EXEC SQL END DECLARE SECTION;
+
+    memset(&stAlgoDtl, 0, sizeof(TAlgoDtls));
+    vFillAlgoDtl(&stAlgoDtl);
+    if(IBPIserr())
+		return;
+
+    if(RC_SUCC != lAlgoDtlTxn(&stAlgoDtl))
+		return ;
+
+    EXEC SQL INSERT INTO TBL_ALGO_DTLS VALUES (:stAlgoDtl);
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "新增清分记录(%s)失败, %s", stAlgoDtl.id, sDbsError());
+		return ;
+    }
+
+    vErrorAlgoAct(&stAlgoDtl, "差错冻结重新入账");
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vAlgoAccount()
+    功能描述：
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CAccount::vAlgoAccount()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TAlgoDtls       stAlgoDtl;
+    char            szStatus[20];
+    EXEC SQL END DECLARE SECTION;
+
+    memset(szStatus, 0, sizeof(szStatus));
+    memset(&stAlgoDtl, 0, sizeof(TAlgoDtls));
+    vFillAlgoDtl(&stAlgoDtl);
+    IBPgetstring("status", szStatus, "交易状态");
+    if(IBPIserr())    return;
+
+    if(strcmp(szStatus, "success"))	//	目前值只支持正向交易
+	{
+        SYSError(RET_DATABASE, "非正向成功交易");
+		return ;
+	}
+   
+    if(RC_SUCC != lAlgoDtlTxn(&stAlgoDtl))
+        goto ErrorAccount;
+
+    EXEC SQL INSERT INTO TBL_ALGO_DTLS VALUES (:stAlgoDtl);
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "新增清分记录(%s)失败, %s", stAlgoDtl.id, sDbsError());
+		return ;
+    }
+
+    lAlgoActChange(&stAlgoDtl, ACCOUNT_TRANS_AMT, "快捷交易入账");
+    return ;
+
+ErrorAccount:
+    EXEC SQL ROLLBACK WORK;
+    vInsertError(&stAlgoDtl);
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vInsertError(TAlgoDtls *pstAlgoDtl)
+    功能描述：写TBL_STLM_ERR表数据
+    返回说明：
+        RC_SUCC      --成功
+        RC_FAIL      --失败
+**************************************************************************************************/
+void    CAccount::vInsertError(TAlgoDtls *pstAlgoDtl)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    long        lRec;
+    TOrderErr   stErr;
+    EXEC SQL END DECLARE SECTION;
+
+    memset(&stErr, 0, sizeof(TOrderErr));
+    stErr.tx_amt         = pstAlgoDtl->tx_amt;
+    stErr.local_amt      = pstAlgoDtl->tx_amt;
+    stErr.card_type      = pstAlgoDtl->card_type;
+    stErr.disc_cycle     = pstAlgoDtl->disc_cycle;
+    stErr.err_type[0]    = ERR_CUP_MCHT_UNUSUAL;
+    stErr.stlm_type[0]   = ERR_CUP_NOT_CHECK;
+    stErr.result_flag[0] = STLM_CUP_NOT_DEAL;
+    memcpy(stErr.id, pstAlgoDtl->id, sizeof(stErr.id) - 1);
+    memcpy(stErr.tx_date, pstAlgoDtl->tx_date, 8);
+    memcpy(stErr.tx_time, pstAlgoDtl->tx_time, 6);
+    memcpy(stErr.channel_no, pstAlgoDtl->channel_no, sizeof(stErr.channel_no) - 1);
+    memcpy(stErr.pay_type, pstAlgoDtl->pay_type, sizeof(stErr.pay_type) - 1);
+    memcpy(stErr.seq_order, pstAlgoDtl->seq_order, sizeof(stErr.seq_order) - 1);
+    memcpy(stErr.bank_code, pstAlgoDtl->bank_code, sizeof(stErr.bank_code) - 1);
+    memcpy(stErr.bank_card_no, pstAlgoDtl->bank_card_no, sizeof(stErr.bank_card_no) - 1);
+    memcpy(stErr.user_name, pstAlgoDtl->user_name, sizeof(stErr.user_name) - 1);
+    memcpy(stErr.bank_acc_type, pstAlgoDtl->bank_acc_type, sizeof(stErr.bank_acc_type) - 1);
+    memcpy(stErr.bank_full_name, pstAlgoDtl->bank_full_name, sizeof(stErr.bank_full_name) - 1);
+    memcpy(stErr.bank_branch_name, pstAlgoDtl->bank_branch_name, sizeof(stErr.bank_branch_name) - 1);
+    memcpy(stErr.bank_areacode, pstAlgoDtl->bank_areacode, sizeof(stErr.bank_areacode) - 1);
+    memcpy(stErr.cnaps_no, pstAlgoDtl->cnaps_no, sizeof(stErr.cnaps_no) - 1);
+    memcpy(stErr.cnaps_bankno, pstAlgoDtl->cnaps_bankno, sizeof(stErr.cnaps_bankno) - 1);
+    memcpy(stErr.currency, pstAlgoDtl->currency, sizeof(stErr.currency) - 1);
+    memcpy(stErr.remark, pstAlgoDtl->remark, sizeof(stErr.remark) - 1);
+    memcpy(stErr.app_code, pstAlgoDtl->app_code, sizeof(stErr.app_code) - 1);
+    memcpy(stErr.mert_no, pstAlgoDtl->mert_no, sizeof(stErr.mert_no) - 1);
+    memcpy(stErr.mert_nm, pstAlgoDtl->mert_nm, sizeof(stErr.mert_nm) - 1);
+    memcpy(stErr.brh_code, pstAlgoDtl->brh_code, sizeof(stErr.brh_code) - 1);
+    memcpy(stErr.cert_type, pstAlgoDtl->cert_type, sizeof(stErr.cert_type) - 1);
+    memcpy(stErr.cert_no, pstAlgoDtl->cert_no, sizeof(stErr.cert_no) - 1);
+    memcpy(stErr.mobile_no, pstAlgoDtl->mobile_no, sizeof(stErr.mobile_no) - 1);
+    memcpy(stErr.order_id, pstAlgoDtl->order_id, sizeof(stErr.order_id) - 1);
+    memcpy(stErr.product_code, pstAlgoDtl->product_code, sizeof(stErr.product_code) - 1);
+    memcpy(stErr.product_name, pstAlgoDtl->product_name, sizeof(stErr.product_name) - 1);
+    memcpy(stErr.pay_kind, pstAlgoDtl->pay_kind, sizeof(stErr.pay_kind) - 1);
+    memcpy(stErr.err_desc, "商户信息异常", sizeof(stErr.err_desc) - 1);
+    memcpy(stErr.settle_num, SETTLE_PAY_REALTM, 4);
+    memcpy(stErr.create_time, pstAlgoDtl->create_time, 14);
+    IBPgetdefstring("status", stErr.status, "");
+
+    EXEC SQL SELECT COUNT(*) INTO :lRec FROM TBL_ALGO_DTLS WHERE ID = :stErr.id;
+    if(lRec > 0)
+    {
+        SYSError(RET_DATABASE, "流水(%s)已清分, 无法登记", stErr.id);
+        return ;
+    }
+
+    EXEC SQL INSERT INTO TBL_ORDER_ERR VALUES (:stErr);
+    if (SQLCODE)
+    {
+        SYSError(RET_DATABASE, "新增差错明细(%s)失败, (%s)", stErr.id, sDbsError());
+		return ;
+    }
+
+	if(RC_FAIL == lAlgoActChange(pstAlgoDtl, ACCOUNT_FREEZ_AMT, "快捷冻结入账"))
+		return ;
+
+    EXEC SQL COMMIT WORK;
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：lProductPayFee(TSettleTxn *pstSettle)
+    功能描述：计算代付账务
+    返回说明：
+        无
+**************************************************************************************************/
+long	CAccount::lProductPayFee(TSettleTxn *pstSettle)
+{
+	long			i;
+    dbDiscAlgo      stAlgo;
+	dbMchtProd      stProd;
+    EXEC SQL BEGIN DECLARE SECTION;
+    TAccountDetail  stDetail;
+	double          dTotalFee, dTotalAmt;
+	char			szActNo[31], szChnNo[5];
+    EXEC SQL END DECLARE SECTION;
+
+    memset(szActNo, 0, sizeof(szActNo));
+    memset(szChnNo, 0, sizeof(szChnNo));
+    memset(&stDetail, 0, sizeof(TAccountDetail));
+    if(RC_SUCC != lGetMchtPord(&stProd, pstSettle->product_code))
+    {
+		IBPputstring("TR_MapCode", "VID0013");
+		IBPputstring("TR_MapMsg", "产品信息异常");
+        SYSError(RET_SYSTEM, "获取商户(%s)(%s)信息失败, err:(%s)", pstSettle->app_no,
+            pstSettle->product_code, sGetError());
+        return RC_FAIL;
+    }
+
+    //  非代付或者不是代付清算模式(本模块仅仅支持代付且代付清算模式)   
+    if(strcmp(stProd.buss_type, "PB") || 2 != stProd.settle_model)
+    {
+		IBPputstring("TR_MapCode", "VID0014");
+		IBPputstring("TR_MapMsg", "代付产品编号不匹配");
+        SYSError(RET_SYSTEM, "产品(%s)编号不匹配", stProd.prod_code);
+        return RC_FAIL;
+    }
+
+	pstSettle->card_type = 1;
+    for(i = 0; i < stProd.disc_num; i ++)
+    {
+        memset(stAlgo.disc_id, 0, sizeof(stAlgo.disc_id));
+        strncpy(stAlgo.disc_id, sGetValueByIdx(stProd.dis_groups, ",", i + 1), sizeof(stAlgo.disc_id) - 1);
+    	if(RC_SUCC != lGetDiscAlgo(stAlgo.disc_id, pstSettle->settle_amt, pstSettle->card_type, &stAlgo))
+    	{
+			IBPputstring("TR_MapCode", "VID0015");
+			IBPputstring("TR_MapMsg", "费率配置异常");
+        	SYSError(RET_SYSTEM, "获取费率模型(%s)失败, %s", stAlgo.disc_id, sGetError());
+        	return RC_FAIL;
+    	}
+
+		pstSettle->settle_fee += dGetAlgoFee(&stAlgo, pstSettle->settle_amt, &stDetail.resv);
+    }
+
+	stDetail.trace_no = lGetSeqNo();
+    stDetail.dc_flag[0] = ACCOUNT_FLAG_D;
+    stDetail.app_type[0] = ACCOUNT_MERT_NO;
+    stDetail.fund_flag[0] = ACCOUNT_FLG_NMAL;
+	pstSettle->settle_fee = Round(pstSettle->settle_fee, 2);
+	stDetail.in_amt = pstSettle->settle_amt + pstSettle->settle_fee;
+	IBPputdouble("TR_CostFee", pstSettle->settle_fee);
+
+	dTotalFee = pstSettle->settle_fee;
+	dTotalAmt = pstSettle->settle_amt;
+    memcpy(stDetail.settle_date, sGetActDate(), 8);
+    memcpy(stDetail.apply_date, stDetail.settle_date, 8);
+    memcpy(stDetail.create_time, pstSettle->create_time, 14);
+	memcpy(stDetail.app_no, pstSettle->app_no, sizeof(stDetail.app_no));
+	strncpy(stDetail.apply_no, pstSettle->id, sizeof(stDetail.apply_no));
+	strncpy(stDetail.in_illust, "主动代付清算", sizeof(stDetail.in_illust) - 1);
+	if(!strcmp(stProd.sub_buss_type, "22")) // D0 S0
+	{
+    	stDetail.in_type[0]  = ACCOUNT_TRANS_AMT;
+		memcpy(pstSettle->settle_num, SETTLE_PAY_REALTM, 4);
+		IBPputstring("TR_ProdChn", "0203");
+	}
+	else
+	{
+    	stDetail.in_type[0]  = ACCOUNT_BALAN_AMT;
+		memcpy(pstSettle->settle_num, SETTLE_PAY_NORMAL, 4);
+		IBPputstring("TR_ProdChn", "0201");
+	}
+
+    EXEC SQL INSERT INTO TBL_ACCOUNT_DETAIL (ID, SETTLE_DATE, TRACE_NO, APP_TYPE, APP_NO,
+        DC_FLAG, FUND_FLAG, IN_TYPE, IN_AMT, IN_ILLUST, APPLY_DATE, APPLY_NO, CREATE_TIME)
+    SELECT SEQ_ACCOUNT_DETAIL.NEXTVAL, :stDetail.settle_date, :stDetail.trace_no,
+        :stDetail.app_type, :stDetail.app_no, :stDetail.dc_flag, :stDetail.fund_flag,
+        :stDetail.in_type, :stDetail.in_amt, :stDetail.in_illust, :stDetail.apply_date,
+        :stDetail.apply_no, :stDetail.create_time FROM DUAL;
+    if(SQLCODE)
+    {
+		IBPputstring("TR_MapCode", "VID0006");
+		IBPputstring("TR_MapMsg", "系统异常");
+        SYSError(RET_DATABASE, "新增账户资金明细(%s)失败, %s", stDetail.app_no, sDbsError());
+        return RC_FAIL;
+    }
+
+    if(ACCOUNT_TRANS_AMT == stDetail.in_type[0])
+	{
+        EXEC SQL UPDATE TBL_CASH_ACCOUNT SET
+			TOTAL_FEE   = TOTAL_FEE + :dTotalFee,
+			TOTAL_PAY   = TOTAL_PAY + :dTotalAmt,
+            TRANS_AMT   = TRANS_AMT - :stDetail.in_amt,    
+            UPDATE_TIME = :stDetail.create_time
+        WHERE APP_TYPE  = :stDetail.app_type AND APP_NO = :stDetail.app_no
+			AND TRANS_AMT >= :stDetail.in_amt;
+	}
+	else
+	{
+        EXEC SQL UPDATE TBL_CASH_ACCOUNT SET
+			TOTAL_FEE   = TOTAL_FEE + :dTotalFee,
+			TOTAL_PAY   = TOTAL_PAY + :dTotalAmt,
+            BALANCE_AMT = BALANCE_AMT - :stDetail.in_amt,    
+            UPDATE_TIME = :stDetail.create_time
+        WHERE APP_TYPE  = :stDetail.app_type AND APP_NO = :stDetail.app_no
+			AND TRANS_AMT >= :stDetail.in_amt;
+	}
+    if(SQLCODE)
+    {
+		if(SQLNOTFOUND)
+		{
+			IBPputstring("TR_MapCode", "VID0025");
+			IBPputstring("TR_MapMsg", "账户余额不足");
+        	SYSError(RET_DATABASE, "账户(%s)余额不足", stDetail.app_no);
+		}
+		else
+		{
+			IBPputstring("TR_MapCode", "VID0006");
+			IBPputstring("TR_MapMsg", "系统异常");
+        	SYSError(RET_DATABASE, "更新商户(%s)账户失败, %s", stDetail.app_no, sDbsError());
+		}
+        return RC_FAIL;
+    }
+
+	memcpy(szChnNo, pstSettle->channel_no, sizeof(szChnNo));
+	EXEC SQL SELECT CHANNEL_ACT INTO :szActNo FROM TBL_CHANNEL_ACCOUNT WHERE CHANNEL_NO = :szChnNo;
+	if(SQLCODE)
+	{
+		IBPputstring("TR_MapCode", "VID0006");
+		IBPputstring("TR_MapMsg", "系统异常");
+        SYSError(RET_DATABASE, "查询付款帐号(%s)账户异常, %s", szChnNo, sDbsError());
+		return RC_FAIL;
+	}
+
+	memcpy(pstSettle->pay_acct, szActNo, sizeof(pstSettle->pay_acct) - 1);
+	IBPputstring("TR_MertChn", szActNo);
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：vPaySettleTxn()
+    功能描述：代付清算
+    返回说明：
+        无
+**************************************************************************************************/
+void    CAccount::vPaySettleTxn()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+	TSettleTxn        stSettle;
+    EXEC SQL END DECLARE SECTION;
+
+	memset(&stSettle, 0, sizeof(TSettleTxn));
+    stSettle.result_flag[0] = SETTLE_IN_FLAG_PREQ;
+    IBPgetdouble("TR_Amt", &stSettle.settle_amt, "代付金额");
+    IBPgetstring("TR_MertNo", stSettle.app_no, "账户商户号");
+    IBPgetstring("TR_Order", stSettle.pay_order, "代付下游订单号");
+    IBPgetstring("TR_Note", stSettle.remark, "代付摘要");
+    IBPgetstring("TR_OrgOrder", stSettle.ext_properties, "原交易订单号");
+    IBPgetstring("TR_OrgDate", stSettle.tx_date, "原交易日期");
+    IBPgetstring("TR_ActNo", stSettle.acct_no, "代付账户");
+    IBPgetstring("TR_ActNm", stSettle.acct_nm, "代付账户姓名");
+    IBPgetstring("TR_ActType", stSettle.acct_type, "收款帐号类型");
+    IBPgetstring("TR_BankNo", stSettle.acct_bank_no, "银行编号");
+    IBPgetstring("TR_BankNm", stSettle.acct_bank_nm, "银行名称");
+    IBPgetstring("TR_ClearDate", stSettle.settle_date, "清算日期");
+    IBPgetstring("TR_Product", stSettle.product_code, "代付产品编号");
+    IBPgetdefstring("TR_CertType", stSettle.cert_type, "");
+    IBPgetdefstring("TR_CertNo", stSettle.cert_no, "");
+    IBPgetdefstring("TR_Phone", stSettle.resv_phone, "");
+    if(IBPIserr())
+	{
+		IBPputstring("TR_MapCode", "VID0009");
+		IBPputstring("TR_MapMsg", "请求参数非法");
+        return;
+	}
+
+	if('0' == stSettle.acct_type[0])
+		IBPputstring("TR_ActChn", "1");
+	else
+		IBPputstring("TR_ActChn", "0");
+
+	IBPputlong("TR_AmtCent", (long)(stSettle.settle_amt * 100));	//	代付金额分为单位
+	stSettle.app_type[0] = ACCOUNT_MERT_NO;
+    memcpy(stSettle.create_time, sGetCurrentTime(), 14);
+    if(stSettle.settle_amt <= 0.0005)
+    {
+		IBPputstring("TR_MapCode", "VID0019");
+		IBPputstring("TR_MapMsg", "代付金额非法");
+        SYSError(RET_SYSTEM, "账户(%s)入账金额非法(%.3f)", stSettle.app_no, stSettle.settle_amt);
+        return ;
+    }
+
+	EXEC SQL SELECT CHANNEL_NO, MERT_NM, CURRENCY INTO :stSettle.channel_no, 
+		:stSettle.app_nm, :stSettle.currency FROM TBL_ALGO_DTLS 
+	WHERE ORDER_ID = :stSettle.ext_properties AND TX_DATE = :stSettle.tx_date;
+    if(SQLCODE)
+    {
+		IBPputstring("TR_MapCode", "VID0002");
+		IBPputstring("TR_MapMsg", "原交易不存在，请确认");
+        SYSError(RET_DATABASE, "查询原始交易(%s)(%s)失败, %s", stSettle.tx_date, 
+			stSettle.pay_order, sDbsError());
+        return ;
+    }
+	
+    snprintf(stSettle.id, sizeof(stSettle.id), "%s%s%03d%010d", stSettle.channel_no, 
+		stSettle.settle_date, lGetSysMaster(), lGetSeqNo());
+    snprintf(stSettle.trace_no, sizeof(stSettle.trace_no), "%s%03d%012d", 
+		stSettle.settle_date + 1, lGetSysMaster(), lGetSeqNo());
+	IBPputstring("TR_Serial", stSettle.id);
+	IBPputstring("TR_ChnNo", stSettle.channel_no);
+	if(RC_SUCC != lProductPayFee(&stSettle))
+		return ;
+
+    EXEC SQL INSERT INTO TBL_SETTLE_TXN VALUES (:stSettle);
+    if(SQLCODE)
+    {
+		IBPputstring("TR_MapCode", "VID0006");
+		IBPputstring("TR_MapMsg", "系统异常");
+        SYSError(RET_DATABASE, "生成代付流水(%s)失败, %s", stSettle.id, sDbsError());
+		return ;
+    }
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vSynSettleTxn()
+    功能描述：同步代付结果
+    返回说明：
+        无
+**************************************************************************************************/
+void	CAccount::vSynSettleTxn()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+	TSettleTxn  stSettle;
+	char		szFlag[2];
+    EXEC SQL END DECLARE SECTION;
+
+    memset(szFlag, 0, sizeof(szFlag));
+    memset(&stSettle, 0, sizeof(TSettleTxn));
+    IBPgetstring("TR_Serial", stSettle.id, "代付订单号");
+    IBPgetstring("TR_TxDate", stSettle.in_date, "入账日期");
+    IBPgetstring("TR_MapCode", stSettle.status, "本地状态");
+    IBPgetstring("status", stSettle.bank_status, "响应码");
+    if(IBPIserr())
+        return;
+
+	IBPputstring("NEXT_STEP", "1");
+    IBPgetdefstring("TR_MapMsg", stSettle.status_msg, "");
+    IBPgetdefstring("status_msg", stSettle.bank_status_msg, "");
+	if(!strcmp(stSettle.status, "VID0000"))
+		szFlag[0] = SETTLE_IN_FLAG_SUCC;
+	else if(!strcmp(stSettle.status, "VID0001") || !strcmp(stSettle.status, "VID0002"))
+	{
+		IBPputstring("NEXT_STEP", "0");
+		szFlag[0] = SETTLE_IN_FLAG_REQS;
+	}
+	else
+		szFlag[0] = SETTLE_IN_FLAG_FAIL;
+	
+	if(SETTLE_IN_FLAG_REQS == szFlag[0])
+		return ;
+
+    memcpy(stSettle.update_time, sGetCurrentTime(), 14);
+    EXEC SQL UPDATE TBL_SETTLE_TXN SET
+       RESULT_FLAG    = :szFlag,
+       IN_DATE        = :stSettle.in_date,
+       STATUS         = :stSettle.status,
+       STATUS_MSG     = :stSettle.status_msg,
+       BANK_STATUS    = :stSettle.bank_status,
+       BANK_STATUS_MSG= :stSettle.bank_status_msg,
+       UPDATE_TIME    = :stSettle.update_time
+    WHERE ID          = :stSettle.id;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "更新清算流水表(%s)失败, err:(%d)(%s)", stSettle.id, 
+            SQLCODE, sDbsError());
+        return ;
+    }
+
+	EXEC SQL SELECT * INTO :stSettle FROM TBL_SETTLE_TXN WHERE ID = :stSettle.id;
+	if(SQLCODE)
+	{
+        SYSError(RET_DATABASE, "查询流水表(%s)失败, %s", stSettle.id, sDbsError());
+		return ;
+	}
+
+	if(SETTLE_IN_FLAG_FAIL == szFlag[0] && SETTLE_IN_FLAG_SUCC == stSettle.result_flag[0])
+	    vAccountReverse(&stSettle);
+	else if(SETTLE_IN_FLAG_SUCC == szFlag[0] && SETTLE_IN_FLAG_FAIL == stSettle.result_flag[0])
+	    vPayActChange(&stSettle, ACCOUNT_FLAG_D, "代付交易成功");
+	return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vUpdateResult()
+    功能描述：
+    返回说明：
+        无
+**************************************************************************************************/
+void	CAccount::vUpdateResult()
+{
+    CtsAsyn     stAsyn;
+    EXEC SQL BEGIN DECLARE SECTION;
+	TSettleTxn  stSettle;
+    EXEC SQL END DECLARE SECTION;
+
+    memset(&stSettle, 0, sizeof(TSettleTxn));
+	IBPgetdouble("TR_Amt", &stSettle.settle_amt, "代付金额");
+    IBPgetstring("TR_Serial", stSettle.id, "代付订单号");
+    IBPgetstring("TR_TxDate", stSettle.in_date, "入账日期");
+    IBPgetstring("TR_MapCode", stSettle.status, "本地状态");
+	IBPgetstring("TR_MertNo", stSettle.app_no, "账户商户号");
+    IBPgetstring("status", stSettle.bank_status, "响应码");
+    IBPgetstring("status_msg", stSettle.bank_status_msg, "响应信息");
+	IBPgetdouble("TR_CostFee", &stSettle.settle_fee, "代付手续费");
+    if(IBPIserr())
+        return;
+
+    IBPgetdefstring("TR_MapMsg", stSettle.status_msg, "");
+	if(!strcmp(stSettle.status, "VID0000"))
+		stSettle.result_flag[0] = SETTLE_IN_FLAG_SUCC;
+	else if(!strcmp(stSettle.status, "VID0001") || !strcmp(stSettle.status, "VID0002"))
+		stSettle.result_flag[0] = SETTLE_IN_FLAG_REQS;
+	else
+		stSettle.result_flag[0] = SETTLE_IN_FLAG_FAIL;
+    memcpy(stSettle.update_time, sGetCurrentTime(), 14);
+
+    EXEC SQL UPDATE TBL_SETTLE_TXN SET
+       RESULT_FLAG    = :stSettle.result_flag,
+       IN_DATE        = :stSettle.in_date,
+       STATUS         = :stSettle.status,
+       STATUS_MSG     = :stSettle.status_msg,
+       BANK_STATUS    = :stSettle.bank_status,
+       BANK_STATUS_MSG= :stSettle.bank_status_msg,
+       UPDATE_TIME    = :stSettle.update_time
+    WHERE ID          = :stSettle.id;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "更新清算流水表(%s)失败, err:(%d)(%s)", stSettle.id, 
+            SQLCODE, sDbsError());
+        return ;
+    }
+
+	if(SETTLE_IN_FLAG_SUCC == stSettle.result_flag[0])
+		return ;
+	else if(SETTLE_IN_FLAG_FAIL == stSettle.result_flag[0])	//	明确失败
+	{
+		vAccountReverse(&stSettle);
+		return ;
+	}
+
+	//	登记异步回调
+    memset(&stAsyn, 0, sizeof(CtsAsyn));
+    IBPgetdefstring("TR_NotifyUrl", stAsyn.m_szMark, "");
+	if(0x00 == stAsyn.m_szMark[0])
+		return ;
+
+    stAsyn.m_lIdxTime = lGetUnixTime();
+    strncpy(stAsyn.m_szIdx, stSettle.id, sizeof(stAsyn.m_szIdx));
+    strncpy(stAsyn.m_szCrDate, sGetActDate(), sizeof(stAsyn.m_szCrDate));
+
+	if(RC_SUCC != lRegisterAsyn((SATvm *)pGetSATvm(), &stAsyn))
+	{
+		IBPwarn("登记(%s)回调异步失败, %s", stSettle.id, sGetError());
+		return ;
+	}
+
+    return;
+}
+
+/**************************************************************************************************
+    函 数 名：vReverseSettle()
+    功能描述：设置交易流水失败并冲正账务
+    返回说明：
+        无
+**************************************************************************************************/
+void	CAccount::vReverseSettle()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TAccountDetail  stDetail;
+	TSettleTxn      stSettle;
+    EXEC SQL END DECLARE SECTION;
+
+    memset(&stSettle, 0, sizeof(TSettleTxn));
+    memset(&stDetail, 0, sizeof(TAccountDetail));
+    IBPgetdouble("TV_SeqNo", &stDetail.trace_no, "原始流水号");
+    IBPgetdouble("TV_ClearDate", stDetail.settle_date, "原始清算日期");
+    if(IBPIserr())
+        return;
+
+	EXEC SQL SELECT * INTO :stDetail FROM TBL_ACCOUNT_DETAIL WHERE 
+		SETTLE_DATE = :stDetail.settle_date AND TRACE_NO = :stDetail.trace_no;
+	if(SQLCODE)
+	{
+        SYSError(RET_DATABASE, "查找原始入账流水(%s)(%d)失败, err:%s", 
+			stSettle.settle_date, stDetail.trace_no, sDbsError());
+		return ;
+	}
+
+	if(ACCOUNT_FLG_RESV == stDetail.fund_flag[0])
+	{
+        SYSError(RET_SYSTEM, "原始入账流水(%s)(%d)已撤销", stSettle.settle_date, 
+			stDetail.trace_no);
+		return ;
+	}
+
+	EXEC SQL SELECT * INTO :stSettle FROM TBL_SETTLE_TXN WHERE ID = :stDetail.apply_no;
+	if(SQLCODE)
+	{
+        SYSError(RET_DATABASE, "查询流水表(%s)失败, %s", stSettle.id, sDbsError());
+		return ;
+	}
+
+	stSettle.result_flag[0] = SETTLE_IN_FLAG_FAIL;
+    strcpy(stSettle.status, "VID0005");
+    strcpy(stSettle.status_msg, "原交易已撤销");
+    memcpy(stSettle.update_time, sGetCurrentTime(), 14);
+
+    EXEC SQL UPDATE TBL_SETTLE_TXN SET
+       RESULT_FLAG    = :stSettle.result_flag,
+       STATUS         = :stSettle.status,
+       STATUS_MSG     = :stSettle.status_msg,
+       UPDATE_TIME    = :stSettle.update_time
+    WHERE ID          = :stSettle.id;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "更新清算流水表(%s)失败, err:(%d)(%s)", stSettle.id, 
+            SQLCODE, sDbsError());
+        return ;
+    }
+
+	vAccountReverse(&stSettle);
+    return;
+}
+
+/**************************************************************************************************
+    函 数 名：vPopAsynIndex()
+    功能描述：弹出异步标识
+    返回说明：
+        无
+**************************************************************************************************/
+void	CAccount::vPopAsynIndex()
+{
+	CtsAsyn   stAsyn;
+	SATvm     *pstSavm = (SATvm *)pGetSATvm();
+
+	memset(&stAsyn, 0, sizeof(CtsAsyn));
+    IBPgetstring("TR_Serial", stAsyn.m_szIdx, "代付订单号");
+    if(IBPIserr())
+        return;
+
+    pstSavm->pstVoid = &stAsyn;
+    pstSavm->lFind   = IDX_SELECT;
+    pstSavm->lSize   = sizeof(CtsAsyn);
+    pstSavm->tblName = CTS_ASYN_IDENTIFY;
+    if(RC_SUCC != lSelect(pstSavm, &stAsyn))
+	{
+        SYSError(RET_SYSTEM, "查询异步标识(%s)失败, %s", stAsyn.m_szIdx, sGetError());
+		return ;
+	}
+
+	IBPputstring("TR_NotifyUrl", stAsyn.m_szMark);
+    if(RC_SUCC != lDelete(pstSavm))
+    {
+        if(NO_DATA_FOUND != pstSavm->m_lErrno)
+		{
+        	SYSError(RET_SYSTEM, "删除异步标识(%s)失败, %s", stAsyn.m_szIdx, sGetError());
+            return ;
+		}
+    }
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vPaySettleChk()
+    功能描述：
+    返回说明：
+        无
+**************************************************************************************************/
+void	CAccount::vPaySettleChk()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+	TSettleTxn  stSettle;
+    EXEC SQL END DECLARE SECTION;
+
+    memset(&stSettle, 0, sizeof(TSettleTxn));
+    IBPgetstring("TR_MertNo", stSettle.app_no, "账户商户号");
+    IBPgetstring("TR_Order", stSettle.pay_order, "代付下游订单号");
+    if(IBPIserr())
+        return ;
+
+	stSettle.app_type[0] = ACCOUNT_MERT_NO;
+    EXEC SQL SELECT STATUS, SETTLE_DATE, IN_DATE, SETTLE_AMT, STATUS_MSG INTO :stSettle.status, 
+		:stSettle.settle_date, :stSettle.in_date, :stSettle.settle_amt, :stSettle.status_msg 
+	FROM TBL_SETTLE_TXN WHERE APP_TYPE = :stSettle.app_type AND APP_NO = :stSettle.app_no 
+		AND PAY_ORDER = :stSettle.pay_order;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "查询代付流水(%s)(%s)失败, %s", stSettle.app_no, 
+			stSettle.pay_order, sDbsError());
+        return ;
+    }
+
+	IBPputdouble("TR_Amt", stSettle.settle_amt);
+	IBPputstring("status", stSettle.status);
+	IBPputstring("status_msg", stSettle.status_msg);
+	IBPputstring("TR_OrderDate", stSettle.tx_date);
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vCheckAlgoTxn()
+    功能描述：
+    返回说明：
+        无
+**************************************************************************************************/
+void    CAccount::vCheckAlgoTxn()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    long    lCount = 0;
+    char    szIdx[30];
+    EXEC SQL END DECLARE SECTION;
+
+    memset(szIdx, 0, sizeof(szIdx));
+    IBPgetstring("id", szIdx, "id主键");
+    if(IBPIserr())
+        return ;
+
+    EXEC SQL SELECT COUNT(*) INTO :lCount FROM (
+        SELECT A.ID FROM TBL_ALGO_DTLS A WHERE A.ID = :szIdx
+        UNION
+        SELECT E.ID FROM TBL_ORDER_ERR E WHERE E.ID = :szIdx);
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "查询清分表(%s)记录失败, err:(%d)(%s)",
+            szIdx, SQLCODE, sDbsError());
+        return ;
+    }
+
+    if(1 != lCount)
+    {
+        SYSError(RET_DATABASE, "无此(%s)流水", szIdx);
+        return ;
+    }
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vQueryBalance()
+    功能描述：
+    返回说明：
+        无
+**************************************************************************************************/
+void	CAccount::vQueryBalance()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+	TCashAccount    stCaAct;
+    double  dTrans, dBalan, dFreeze;
+    char	szMertNo[21], szType[2];
+    EXEC SQL END DECLARE SECTION;
+
+    memset(&stCaAct, 0, sizeof(TCashAccount));
+    IBPgetstring("TR_MertNo", stCaAct.app_no, "账户商户号");
+    if(IBPIserr())
+        return ;
+
+	stCaAct.app_type[0] = ACCOUNT_MERT_NO;
+    EXEC SQL SELECT TRANS_AMT, BALANCE_AMT, BALANCE_ING, FREEZE_AMT INTO :stCaAct.trans_amt, 
+		:stCaAct.balance_amt, :stCaAct.balance_ing, :stCaAct.freeze_amt
+	FROM TBL_CASH_ACCOUNT 
+	WHERE APP_TYPE = :stCaAct.app_type AND APP_NO = :stCaAct.app_no;
+	if(SQLCODE)
+	{
+        SYSError(RET_DATABASE, "查询商户(%s)账户失败, err:(%d)(%s)", szMertNo, 
+			SQLCODE, sDbsError());
+		return ;
+	}
+
+	IBPputdouble("TR_TransAmt", stCaAct.trans_amt);
+	IBPputdouble("TR_BalanAmt", stCaAct.balance_amt);
+	IBPputdouble("TR_BalanIng", stCaAct.balance_ing);
+	IBPputdouble("TR_FreezeAmt", stCaAct.freeze_amt);
+	return ;
+} 
+
+/**************************************************************************************************
+    函 数 名：vMainActBalace()
+    功能描述：
+    返回说明：
+        无
+**************************************************************************************************/
+void	CAccount::vMainActBalace()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+	TChannelAccount stChAct;
+    EXEC SQL END DECLARE SECTION;
+
+    memset(&stChAct, 0, sizeof(TChannelAccount));
+    IBPgetstring("TR_ChnNo", stChAct.channel_no, "渠道编号");
+    IBPgetstring("TR_MertNo", stChAct.channel_act, "渠道编号");
+    IBPgetdouble("RSP_InBal", &stChAct.balance_amt, "已解冻金额");
+    IBPgetdouble("RSP_InFreezeBal", &stChAct.balance_ing, "已结算冻结余额");
+    IBPgetdouble("RSP_TotalBal", &stChAct.trans_amt, "总金额");
+    IBPgetdouble("RSP_TotalFreeze", &stChAct.freeze_amt, "总冻结金额");
+    if(IBPIserr())
+        return ;
+
+	stChAct.trans_amt -= stChAct.balance_amt;
+	stChAct.freeze_amt -= stChAct.balance_ing;
+	stChAct.trans_amt  = stChAct.trans_amt / 100.00;
+	stChAct.freeze_amt = stChAct.freeze_amt / 100.00;
+	stChAct.balance_amt= stChAct.balance_amt / 100.00;
+	stChAct.balance_ing= stChAct.balance_ing / 100.00;
+
+	EXEC SQL UPDATE TBL_CHANNEL_ACCOUNT SET
+		TRANS_AMT	= :stChAct.trans_amt,
+		FREEZE_AMT  = :stChAct.freeze_amt,
+		BALANCE_AMT = :stChAct.balance_amt,
+		BALANCE_ING = :stChAct.balance_ing
+	WHERE CHANNEL_NO = :stChAct.channel_no AND CHANNEL_ACT = :stChAct.channel_act;
+	if(SQLCODE)
+	{
+        SYSError(RET_DATABASE, "查询渠道商户(%s)账户失败, err:(%d)(%s)", stChAct.channel_no,
+			SQLCODE, sDbsError());
+		return ;
+	}
+
+	IBPputdouble("TR_TransAmt", stChAct.trans_amt);
+	IBPputdouble("TR_BalanAmt", stChAct.balance_amt);
+	IBPputdouble("TR_BalanIng", stChAct.balance_ing);
+	IBPputdouble("TR_FreezeAmt", stChAct.freeze_amt);
+	return ;
+}
+
+/*************************************************************************************************
+    code end
+**************************************************************************************************/

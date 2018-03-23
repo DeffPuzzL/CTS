@@ -1,0 +1,473 @@
+/**************************************************************************************************
+    文 件 名：demo.pc
+    代码作者：DeffPuzzL
+    编写版本：
+    创建日期：2016-07-14
+    功能描述：demo实现业务模块
+ **************************************************************************************************/
+#include    "valgo_dtls.h"
+#include    "DbsApi.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+#include    "tbl_order_succ.h"
+#include    "tbl_algo_dtls.h"
+EXEC SQL END DECLARE SECTION;
+
+/**************************************************************************************************
+    方法定义
+ **************************************************************************************************/
+CAlgo::stEvent CAlgo::m_stEvent[] =
+{
+    {"algo",            &CAlgo::vAlgoTxnDtl },
+    {"error",           &CAlgo::vErrorToAlgo },
+    { "", NULL }
+};
+
+/**************************************************************************************************
+    函 数 名：CAlgo()
+    功能描述：构造函数
+    返回说明：
+ **************************************************************************************************/
+CAlgo::CAlgo()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：~CAlgo()
+    功能描述：析构函数
+    返回说明：
+ **************************************************************************************************/
+CAlgo::~CAlgo()
+{
+
+
+}
+
+/**************************************************************************************************
+    函 数 名：lRunObject(char* in_szClass, char* in_szAction)
+    功能描述：运行类中的方法
+    返回说明：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ **************************************************************************************************/
+long    CAlgo::lRunObject(char *in_szClass, char *in_szAction)
+{
+    int     i = 0;
+    char    *p, szAction[256];
+
+    memset(szAction, 0, sizeof(szAction));
+
+    if ((p = strstr(in_szAction, "__")) != NULL)
+    {
+        strncpy(szAction, in_szAction, p - in_szAction);
+    }
+    else
+    {
+        strcpy(szAction, in_szAction);
+    }
+
+    while (0 != strcmp(m_stEvent[i].m_szName, ""))
+    {
+        if (0 == strcmp(m_stEvent[i].m_szName, szAction))
+        {
+            (this->*m_stEvent[i].m_pEvent)();
+            return RC_SUCC;
+        }
+
+        i++;
+    }
+
+    SYSError(RET_SYSTEM, "组件(%s)的事件(%s)没注册", in_szClass, in_szAction);
+    return RC_FAIL;
+}
+
+/**************************************************************************************************
+    函 数 名：dGetAlgoFee(dbDiscAlgo *pstAlgo, double dTxAmt, long *plFeeType)
+    功能描述：计算交易金额对应档费率
+    返回说明：
+        无
+ **************************************************************************************************/
+double  CAlgo::dGetAlgoFee(dbDiscAlgo *pstAlgo, double dTxAmt, long *plFeeType)
+{
+    double dFee = 0.00, dCalFee = 0.00;
+
+    if (DISC_ALGO_FIXED == pstAlgo->flag)              // 按笔(固定)收费
+    {
+        *plFeeType = 4;
+        dCalFee = pstAlgo->fee_value;
+    }
+    else if (DISC_ALGO_RATE == pstAlgo->flag)          // 按比收费
+    {
+        *plFeeType = 1;                              // 1-扣率类
+        dFee = dTxAmt * pstAlgo->fee_value / 100;
+        if (pstAlgo->min_fee >= dFee)                  // 取最小最大区间的费用
+            dFee = pstAlgo->min_fee;
+            
+        if (pstAlgo->max_fee > 0)
+        {
+            if (pstAlgo->max_fee <= dFee)
+            {
+                *plFeeType = 3;                      // 封顶类并达到封顶值
+                dFee = pstAlgo->max_fee;             
+            }   
+            else
+            {
+                *plFeeType = 2;                      // 固定手续费
+            }   
+        }   
+        dCalFee = dFee;
+    }   
+    else
+    {
+        *plFeeType = 0;                              //  其他方式未定，无费率处理
+        dCalFee = 0.00;                              
+    }   
+
+    return dCalFee;
+}
+
+/**************************************************************************************************
+    函 数 名：nCalculateFee(char *pszDiscId, TAlgoDtls *pstAlgoDtl)
+    功能描述：获取当前交易费率
+    返回说明：
+        无
+ **************************************************************************************************/
+long    CAlgo::nCalculateFee(char *pszDiscId, TAlgoDtls *pstAlgoDtl) 
+{
+    long        lCount = 0;
+    dbDiscAlgo  stAlgo;
+    dbDiscAlgo  *pstAlgo = NULL;
+
+    memset(&stAlgo, 0, sizeof(dbDiscAlgo));
+    if(RC_SUCC != lGetDiscAlgo(pszDiscId, pstAlgoDtl->card_type, FIELD_MATCH, &pstAlgo,
+		(long *)&lCount))
+    {
+        SYSError(RET_SYSTEM, "获取费率模型(%s)失败, err:(%s)", pszDiscId, sGetTError());
+        return RC_FAIL;
+    }
+
+    if(RC_SUCC != lGetAlgoModel(pstAlgo, lCount, pstAlgoDtl->tx_amt, &stAlgo))
+    {
+        SYSError(RET_SYSTEM, "获取费率模型(%s)(%d)(%f)分段费率信息失败, err:(%s)",
+ 			pszDiscId, lCount, pstAlgoDtl->tx_amt, sGetTError());
+        IBPFree(pstAlgo);
+        return RC_FAIL;
+    }
+
+    IBPFree(pstAlgo);
+
+    pstAlgoDtl->fee_amt = dGetAlgoFee(&stAlgo, pstAlgoDtl->tx_amt, &pstAlgoDtl->fee_type);
+
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：lAlgoDtlIns(TOrderSucc *pstOrder, char *pszDate, char *pszNum)
+    功能描述：
+    返回说明：
+        无
+ **************************************************************************************************/
+long	CAlgo::lAlgoDtlIns(TOrderSucc *pstOrder, char *pszDate, char *pszNum)
+{
+	dbMchtBase	stBase;
+	dbMchtProd  stProd;
+    EXEC SQL BEGIN DECLARE SECTION;
+ 	TAlgoDtls	stAlgoDtl;
+    EXEC SQL END DECLARE SECTION;
+
+	//	获取商户信息，判断商户是否正常
+	memset(&stAlgoDtl, 0, sizeof(TAlgoDtls));
+	if(RC_SUCC != lGetMchtBase(&stBase, pstOrder->mert_no))
+	{
+		SYSError(RET_SYSTEM, "获取商户(%s)信息失败, err:(%s)", pstOrder->mert_no, sGetTError());
+		return RC_FAIL;
+	}
+
+	if(strcmp(stBase.mcht_status, "ZC"))
+	{
+		SYSError(RET_SYSTEM, "商户(%s)状态(%s)异常, err:(%s)", pstOrder->mert_no, 
+			stBase.mcht_status, sGetTError());
+		return RC_FAIL;
+	}
+
+	//	获取商户产品费率
+	if(RC_SUCC != lGetMchtPord(&stProd, pstOrder->mert_no, pstOrder->product_code))
+	{
+		SYSError(RET_SYSTEM, "获取商户(%s)(%s)信息失败, err:(%s)", pstOrder->mert_no, 
+			pstOrder->product_code, sGetTError());
+		return RC_FAIL;
+	}
+
+    stAlgoDtl.tx_amt       = pstOrder->tx_amt;
+    stAlgoDtl.card_type    = pstOrder->card_type;
+    stAlgoDtl.cup_fee      = pstOrder->cup_fee;
+    stAlgoDtl.disc_cycle   = pstOrder->disc_cycle;
+	stAlgoDtl.brh_flag[0]  = ALGO_BRH_FLAG_NULL;
+    stAlgoDtl.mcht_flag[0] = ALGO_MCHT_FLAG_INIT;
+	strncpy(stAlgoDtl.disc_id, stProd.base_disc, sizeof(stAlgoDtl.disc_id));
+
+	if(RC_SUCC != nCalculateFee(stAlgoDtl.disc_id, &stAlgoDtl))
+	{
+		SYSError(RET_SYSTEM, "记录商户(%s)(%s)手续费失败, err:(%s)", pstOrder->mert_no, 
+			stAlgoDtl.disc_id, sGetTError());
+		return RC_FAIL;
+	}
+	
+	strncpy(stAlgoDtl.id, pstOrder->id, sizeof(stAlgoDtl.id));
+	strncpy(stAlgoDtl.algo_date, pszDate, sizeof(stAlgoDtl.algo_date));
+    strncpy(stAlgoDtl.settle_num, pszNum, sizeof(stAlgoDtl.settle_num));
+	strncpy(stAlgoDtl.stlm_date, pstOrder->stlm_date, sizeof(stAlgoDtl.stlm_date));
+    strncpy(stAlgoDtl.tx_date, pstOrder->tx_date, sizeof(stAlgoDtl.tx_date));
+    strncpy(stAlgoDtl.tx_time, pstOrder->tx_time, sizeof(stAlgoDtl.tx_time));
+    strncpy(stAlgoDtl.channel_no, pstOrder->channel_no, sizeof(stAlgoDtl.channel_no));
+    strncpy(stAlgoDtl.pay_type, pstOrder->pay_type, sizeof(stAlgoDtl.pay_type));
+    strncpy(stAlgoDtl.seq_order, pstOrder->seq_order, sizeof(stAlgoDtl.seq_order));
+    strncpy(stAlgoDtl.bank_code, pstOrder->bank_code, sizeof(stAlgoDtl.bank_code));
+    strncpy(stAlgoDtl.bank_card_no, pstOrder->bank_card_no, sizeof(stAlgoDtl.bank_card_no));
+    strncpy(stAlgoDtl.user_name, pstOrder->user_name, sizeof(stAlgoDtl.user_name));
+    strncpy(stAlgoDtl.bank_acc_type, pstOrder->bank_acc_type, sizeof(stAlgoDtl.bank_acc_type));
+    strncpy(stAlgoDtl.bank_full_name, pstOrder->bank_full_name, sizeof(stAlgoDtl.bank_full_name));
+    strncpy(stAlgoDtl.bank_branch_name, pstOrder->bank_branch_name, sizeof(stAlgoDtl.bank_branch_name));
+    strncpy(stAlgoDtl.bank_areacode, pstOrder->bank_areacode, sizeof(stAlgoDtl.bank_areacode));
+    strncpy(stAlgoDtl.cnaps_no, pstOrder->cnaps_no, sizeof(stAlgoDtl.cnaps_no));
+    strncpy(stAlgoDtl.cnaps_bankno, pstOrder->cnaps_bankno, sizeof(stAlgoDtl.cnaps_bankno));
+    strncpy(stAlgoDtl.currency, pstOrder->currency, sizeof(stAlgoDtl.currency));
+    strncpy(stAlgoDtl.app_code, pstOrder->app_code, sizeof(stAlgoDtl.app_code));
+    strncpy(stAlgoDtl.mert_no, pstOrder->mert_no, sizeof(stAlgoDtl.mert_no));
+    strncpy(stAlgoDtl.mert_nm, pstOrder->mert_nm, sizeof(stAlgoDtl.mert_nm));
+    strncpy(stAlgoDtl.brh_code, pstOrder->brh_code, sizeof(stAlgoDtl.brh_code));
+    strncpy(stAlgoDtl.settle_brhno, pstOrder->brh_code, sizeof(stAlgoDtl.settle_brhno));
+    strncpy(stAlgoDtl.cert_type, pstOrder->cert_type, sizeof(stAlgoDtl.cert_type));
+    strncpy(stAlgoDtl.cert_no, pstOrder->cert_no, sizeof(stAlgoDtl.cert_no));
+    strncpy(stAlgoDtl.mobile_no, pstOrder->mobile_no, sizeof(stAlgoDtl.mobile_no));
+    strncpy(stAlgoDtl.order_id, pstOrder->order_id, sizeof(stAlgoDtl.order_id));
+    strncpy(stAlgoDtl.product_code, pstOrder->product_code, sizeof(stAlgoDtl.product_code));
+    strncpy(stAlgoDtl.product_name, pstOrder->product_name, sizeof(stAlgoDtl.product_name));
+    strncpy(stAlgoDtl.pay_kind, pstOrder->pay_kind, sizeof(stAlgoDtl.pay_kind));
+    strncpy(stAlgoDtl.remark, pstOrder->remark, sizeof(stAlgoDtl.remark));
+    strncpy(stAlgoDtl.create_time, sGetCurrentTime(), sizeof(stAlgoDtl.create_time));
+    strncpy(pstOrder->update_time, stAlgoDtl.create_time, sizeof(pstOrder->update_time));
+
+	EXEC SQL INSERT INTO TBL_ALGO_DTLS VALUES(:stAlgoDtl);
+	if(SQLCODE)
+	{
+		SYSError(RET_SYSTEM, "新增清分流水(%s)信息失败, err:(%s)", stAlgoDtl.id, sGetTError());
+		return RC_FAIL;
+	}
+
+	return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：vAlgoTxnDtl()
+    功能描述：
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CAlgo::vAlgoTxnDtl()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	TOrderSucc	stOrder;
+	char		szDate[9], szNum[5], szTime[7];
+	char		szFlag[2], szUpdate[2], szCups[5];
+	EXEC SQL END DECLARE SECTION;
+	long		lCount = 0;
+    GCts   		*pstCts = (GCts *)pGetGloble();
+
+	memset(szNum, 0, sizeof(szNum));
+	memset(szDate, 0, sizeof(szDate));
+	memset(szTime, 0, sizeof(szTime));
+	memset(szFlag, 0, sizeof(szFlag));
+	memset(szCups, 0, sizeof(szCups));
+	memset(szUpdate, 0, sizeof(szUpdate));
+	IBPgetstring("BAT_InNum", szNum, "批次编号");
+	IBPgetstring("BAT_InCups", szCups, "通道编号");
+	IBPgetstring("BAT_SettleDate", szDate, "清算日期");
+    if(IBPIserr())
+        return ;
+
+	szFlag[0] = TXN_SUCC_ALGO;
+	szUpdate[0] = TXN_SUCC_SUCCESS;
+	strncpy(szTime, IBP_SETTLE_TIME, 6);
+
+    IBPrace("开始清分通道(%s)批次(%s)日期(%s)流水", szCups, szNum, szDate);
+    EXEC SQL DECLARE Cur_order_succ CURSOR FOR
+    	SELECT * FROM TBL_ORDER_SUCC WHERE (TX_DATE <
+    		(SELECT MAX(TRANS_DATE)
+    		    FROM TBL_STLM_DATE
+    		   WHERE WORK_DAYS = (SELECT MAX(WORK_DAYS) - (DISC_CYCLE - 1)
+    		                    FROM TBL_STLM_DATE
+    		                   WHERE STLM_DATE = :szDate)) OR
+    		(TX_DATE =
+    		(SELECT MAX(TRANS_DATE)
+    		     FROM TBL_STLM_DATE
+    		    WHERE WORK_DAYS = (SELECT MAX(WORK_DAYS) - (DISC_CYCLE - 1)
+    		                     FROM TBL_STLM_DATE
+    		                    WHERE STLM_DATE = :szDate)) AND
+    		TX_TIME <= :szTime))
+    	AND RESULT_FLAG = :szFlag
+    	AND DISC_CYCLE > 0;
+
+	EXEC SQL OPEN Cur_order_succ;
+    if(SQLCODE)
+    {   
+        SYSError(RET_DATABASE, "打开游标失败, err:(%d)(%s)", SQLCODE, sDbsError());
+        return ;
+    }
+
+    while (1)
+    {
+		memset(&stOrder, 0, sizeof(TOrderSucc));
+        EXEC SQL FETCH Cur_order_succ INTO :stOrder;
+        if(SQLERR)
+		{
+            SYSError(RET_DATABASE, "查询交易流水失败, err:(%d)(%s)", SQLCODE, sDbsError());
+			EXEC SQL CLOSE Cur_order_succ;
+			return ;
+		}
+		else if(SQLNOTFOUND)
+            break;
+
+		if(RC_SUCC != lAlgoDtlIns(&stOrder, szDate, szNum))
+			continue;		//	虽然失败，但是继续将其他记录处理掉
+
+		EXEC SQL UPDATE TBL_ORDER_SUCC SET
+			RESULT_FLAG = :szUpdate,
+			UPDATE_TIME = :stOrder.update_time
+		WHERE ID = :stOrder.id;
+		if(SQLCODE)	
+		{
+            SYSError(RET_DATABASE, "更新订单流水状态失败, err:(%d)(%s)", SQLCODE, sDbsError());
+			EXEC SQL CLOSE Cur_order_succ;
+			return ;
+		}
+
+        if(0 == ++ lCount % 2000) 
+            EXEC SQL COMMIT WORK;
+	}
+    EXEC SQL COMMIT WORK;
+	EXEC SQL CLOSE Cur_order_succ;
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vErrorToAlgo()
+    功能描述：对账完毕后整理需要重新清分的记录
+    返回说明：
+        无
+ **************************************************************************************************/
+void	CAlgo::vErrorToAlgo()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	TOrderSucc	stOrder;
+	char		szFlag[2], szRedo[2], szUpdate[2], szCups[5];
+	char		szDate[9], szNum[5], szTime[7], szIdx[33];
+	EXEC SQL END DECLARE SECTION;
+	long		lCount = 0;
+    GCts   		*pstCts = (GCts *)pGetGloble();
+
+	memset(szNum, 0, sizeof(szNum));
+	memset(szDate, 0, sizeof(szDate));
+	memset(szRedo, 0, sizeof(szRedo));
+	memset(szTime, 0, sizeof(szTime));
+	memset(szFlag, 0, sizeof(szFlag));
+	memset(szCups, 0, sizeof(szCups));
+	memset(szUpdate, 0, sizeof(szUpdate));
+	IBPgetstring("BAT_InNum", szNum, "批次编号");
+	IBPgetstring("BAT_InCups", szCups, "通道编号");
+	IBPgetstring("BAT_SettleDate", szDate, "清算日期");
+    if(IBPIserr())
+        return ;
+	
+    szFlag[0] = TXN_SUCC_ALGO;
+    szRedo[0] = STLM_CUP_TO_DONE;
+	szUpdate[0] = TXN_SUCC_SUCCESS;
+	strncpy(szTime, IBP_SETTLE_TIME, 6);
+
+    IBPrace("开始清分通道(%s)批次(%s)日期(%s)流水", szCups, szNum, szDate);
+    EXEC SQL DECLARE Cur_order_err CURSOR FOR
+    	SELECT ID FROM TBL_ORDER_ERR WHERE (TX_DATE <
+    		(SELECT MAX(TRANS_DATE)
+    		    FROM TBL_STLM_DATE
+    		   WHERE WORK_DAYS = (SELECT MAX(WORK_DAYS) - (DISC_CYCLE - 1)
+    		                    FROM TBL_STLM_DATE
+    		                   WHERE STLM_DATE = :szDate)) OR
+    		(TX_DATE =
+    		(SELECT MAX(TRANS_DATE)
+    		     FROM TBL_STLM_DATE
+    		    WHERE WORK_DAYS = (SELECT MAX(WORK_DAYS) - (DISC_CYCLE - 1)
+    		                     FROM TBL_STLM_DATE
+    		                    WHERE STLM_DATE = :szDate)) AND
+    		TX_TIME <= :szTime))
+    	AND RESULT_FLAG = :szRedo
+    	AND DISC_CYCLE > 0;
+
+	EXEC SQL OPEN Cur_order_err;
+    if(SQLCODE)
+    {   
+        SYSError(RET_DATABASE, "打开游标失败, err:(%d)(%s)", SQLCODE, sDbsError());
+        return ;
+    }
+
+    while (1)
+    {
+		memset(szIdx, 0, sizeof(szIdx));
+        EXEC SQL FETCH Cur_order_err INTO :szIdx;
+        if(SQLERR)
+		{
+            SYSError(RET_DATABASE, "查询交易流水失败, err:(%d)(%s)", SQLCODE, sDbsError());
+			EXEC SQL CLOSE Cur_order_err;
+			return ;
+		}
+		else if(SQLNOTFOUND)
+            break;
+
+		memset(&stOrder, 0, sizeof(TOrderSucc));
+		EXEC SQL SELECT * INTO :stOrder FROM TBL_ORDER_SUCC WHERE ID = :szIdx;
+		if(SQLCODE)
+		{
+            SYSError(RET_DATABASE, "查询订单(%s)流水失败, err:(%d)(%s)", szIdx, 
+				SQLCODE, sDbsError());
+			EXEC SQL CLOSE Cur_order_err;
+			return ;
+		}
+
+		if(RC_SUCC != lAlgoDtlIns(&stOrder, szDate, szNum))
+			continue;		//	虽然失败，但是继续将其他记录处理掉
+
+		EXEC SQL UPDATE TBL_ORDER_SUCC SET
+			RESULT_FLAG = :szUpdate,
+			UPDATE_TIME = :stOrder.update_time
+		WHERE ID = :stOrder.id;
+		if(SQLCODE)	
+		{
+            SYSError(RET_DATABASE, "更新订单流水状态失败, err:(%d)(%s)", SQLCODE, sDbsError());
+			EXEC SQL CLOSE Cur_order_err;
+			return ;
+		}
+
+		EXEC SQL UPDATE TBL_ORDER_ERR SET
+			RESULT_FLAG = :szUpdate,
+			next_date   = :szDate,
+			UPDATE_TIME = :stOrder.update_time
+		WHERE ID = :stOrder.id;
+		if(SQLCODE)
+		{
+            SYSError(RET_DATABASE, "更新差错表状态失败, err:(%d)(%s)", SQLCODE, sDbsError());
+			EXEC SQL CLOSE Cur_order_err;
+			return ;
+		}
+	}
+
+	EXEC SQL CLOSE Cur_order_err;
+
+	return ;
+}
+
+/*************************************************************************************************
+    code end
+**************************************************************************************************/

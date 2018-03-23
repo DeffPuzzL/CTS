@@ -1,0 +1,161 @@
+/**************************************************************************************************
+    文 件 名：
+    代码作者：
+    编写版本：
+    创建日期：
+    功能描述：
+ **************************************************************************************************/
+#include    "NCardRoute.h"
+
+
+/**************************************************************************************************
+    方法定义
+ **************************************************************************************************/
+NCardRoute::stEvent NCardRoute::m_stEvent[] =
+{
+    { "test",            &NCardRoute::vNCardRouteTest },
+    { "statistics",      &NCardRoute::vNCardRouteStat  },
+    { "synmcht",         &NCardRoute::vNCardRouteSynMcht },
+    { "work",            &NCardRoute::vNCardRouteWork  },
+    { "", NULL }
+};
+
+/**************************************************************************************************
+    函 数 NCardRoute()
+    功能描述：构造函数
+    返回说明：
+ **************************************************************************************************/
+NCardRoute::NCardRoute()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：~NCardRoute()
+    功能描述：析构函数
+    返回说明：
+ **************************************************************************************************/
+NCardRoute::~NCardRoute()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：lRunObject(char* in_szClass, char* in_szAction)
+    功能描述：运行类中的方法
+    返回说明：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ **************************************************************************************************/
+long    NCardRoute::lRunObject(char *in_szClass, char *in_szAction)
+{
+    int     i = 0;
+    char    *p, szAction[256];
+
+    memset(szAction, 0, sizeof(szAction));
+
+    if ((p = strstr(in_szAction, "__")) != NULL)
+    {
+        strncpy(szAction, in_szAction, p - in_szAction);
+    }
+    else
+    {
+        strcpy(szAction, in_szAction);
+    }
+
+    while (0 != strcmp(m_stEvent[i].m_szName, ""))
+    {
+        if (0 == strcmp(m_stEvent[i].m_szName, szAction))
+        {
+            (this->*m_stEvent[i].m_pEvent)();
+            return RC_SUCC;
+        }
+
+        i++;
+    }
+
+    SYSError(RET_SYSTEM, "组件(%s)的事件(%s)没注册", in_szClass, in_szAction);
+    return RC_FAIL;
+}
+
+
+/**
+ * 无卡路由核心工作模块
+ */
+void    NCardRoute::vNCardRouteWork()
+{
+	int iRet = -1;
+
+	iRet = iNCardRouteFindCmerPro();
+
+	if (!iRet)
+	{   
+		//成功
+
+	}   
+	else
+	{   
+		//失败
+
+	}
+	
+    return;
+}
+
+/**
+ * 无卡交易统计模块
+ */
+void    NCardRoute::vNCardRouteStat()
+{
+    int iRet = -1;
+
+    iRet = iNCardRouteStatPro();
+
+    if (!iRet)
+    {
+        //成功
+
+    }
+    else
+    {
+        //失败
+
+    }
+
+    return;
+}
+
+/**
+ * 进程状态测试
+ */
+void    NCardRoute::vNCardRouteTest()
+{
+    return;
+}
+
+/**
+ * 无卡渠道商户同步
+ */
+void    NCardRoute::vNCardRouteSynMcht()
+{
+    int iRet = -1;
+
+    iRet = iNCardRouteSynMchtPro();
+
+    if (!iRet)
+    {
+        //成功
+
+    }
+    else
+    {
+        //失败
+
+    }
+
+    return;
+}
+
+/*************************************************************************************************
+    code end
+**************************************************************************************************/

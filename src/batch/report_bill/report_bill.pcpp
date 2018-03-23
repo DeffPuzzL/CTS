@@ -1,0 +1,575 @@
+/**************************************************************************************************
+    文 件 名：demo.pc
+    代码作者：DeffPuzzL
+    编写版本：
+    创建日期：2016-07-14
+    功能描述：demo实现业务模块
+ **************************************************************************************************/
+#include    "report_bill.h"
+#include    "algo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+#include    "tbl_algo_dtls.h"
+#include    "tbl_mcht_fund.h"
+#include    "tbl_settle_err.h"
+#include    "tbl_settle_txn.h"
+EXEC SQL END DECLARE SECTION;
+
+
+/**************************************************************************************************
+    方法定义
+ **************************************************************************************************/
+CBill::stEvent CBill::m_stEvent[] =
+{
+    {"algo",                    &CBill::vUnloadAlgo },
+    {"settle",                  &CBill::vUnloadSettle },
+    {"paydtl",                  &CBill::vUnloadPayDtl },
+    { "", NULL }
+};
+
+/**************************************************************************************************
+    函 数 名：CBill()
+    功能描述：构造函数
+    返回说明：
+ **************************************************************************************************/
+CBill::CBill()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：~CBill()
+    功能描述：析构函数
+    返回说明：
+ **************************************************************************************************/
+CBill::~CBill()
+{
+
+
+}
+
+/**************************************************************************************************
+    函 数 名：lRunObject(char* in_szClass, char* in_szAction)
+    功能描述：运行类中的方法
+    返回说明：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ **************************************************************************************************/
+long    CBill::lRunObject(char *in_szClass, char *in_szAction)
+{
+    int     i = 0;
+    char    *p, szAction[256];
+
+    memset(szAction, 0, sizeof(szAction));
+
+    if ((p = strstr(in_szAction, "__")) != NULL)
+    {
+        strncpy(szAction, in_szAction, p - in_szAction);
+    }
+    else
+    {
+        strcpy(szAction, in_szAction);
+    }
+
+    while (0 != strcmp(m_stEvent[i].m_szName, ""))
+    {
+        if (0 == strcmp(m_stEvent[i].m_szName, szAction))
+        {
+            (this->*m_stEvent[i].m_pEvent)();
+            return RC_SUCC;
+        }
+
+        i++;
+    }
+
+    SYSError(RET_SYSTEM, "组件(%s)的事件(%s)没注册", in_szClass, in_szAction);
+    return RC_FAIL;
+}
+
+/**************************************************************************************************
+    函 数 名：vUnloadAlgo()
+    功能描述：卸载清分表流水
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CBill::vUnloadAlgo()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TAlgoDtls   stAlgoDtl;
+    long        lCount = 0, lOut = 0;
+    char        szDate[9], szMertNo[21];
+    char        szLine[2048], szFlag[2], szFile[512];
+    EXEC SQL END DECLARE SECTION;
+    FILE        *fp = NULL;
+    GCts        *pstCts = (GCts *)pGetGloble();
+    SATvm       *pstSavm = (SATvm *)pGetSATvm();
+
+    memset(szDate, 0, sizeof(szDate));
+    memset(szFlag, 0, sizeof(szFlag));
+    memset(szFile, 0, sizeof(szFile));
+    memset(szLine, 0, sizeof(szLine));
+    memset(szMertNo, 0, sizeof(szMertNo));
+    IBPgetstring("BAT_DATE", szDate, "清算日期");
+    IBPgetstring("BAT_MERTNO", szMertNo, "商户编号");
+    if(IBPIserr())
+        return ;
+
+    snprintf(szFile, sizeof(szFile), "%s/settle/STLM_%s_%s_DTL.txt", getenv("FILEDIR"), 
+        szDate, szMertNo);
+    if(!(fp = fopen(szFile, "wb")))
+    {
+        SYSError(RET_SYSTEM, "打开文件(%s)失败, err:(%d)(%s)", szFile, errno, strerror(errno));
+        return ;
+    }
+
+    szFlag[0] = ALGO_MCHT_FLAG_SUCC;
+    IBPrace("开始导出日期(%s)交易流水批次文件:\n%s", szDate, szFile);
+    EXEC SQL SELECT COUNT(*), SUM(TX_AMT) INTO :lCount, :stAlgoDtl.tx_amt FROM TBL_ALGO_DTLS 
+        WHERE ALGO_DATE = :szDate AND MCHT_FLAG = :szFlag AND MERT_NO = :szMertNo;
+    if(SQLCODE)
+    {
+        fclose(fp);
+        SYSError(RET_DATABASE, "统计清分记录失败, err:(%d)(%s)", SQLCODE, sDbsError());
+        return ;
+    }
+    fprintf(fp, "%d|%.2f\n", lCount, stAlgoDtl.tx_amt);
+
+    EXEC SQL DECLARE Cur_algo_dtls CURSOR FOR 
+        SELECT * FROM TBL_ALGO_DTLS 
+    WHERE ALGO_DATE = :szDate AND MCHT_FLAG = :szFlag AND MERT_NO = :szMertNo;
+
+    EXEC SQL OPEN Cur_algo_dtls;
+    if(SQLCODE)
+    {
+        fclose(fp);
+        SYSError(RET_DATABASE, "打开游标失败, err:(%d)(%s)", SQLCODE, sDbsError());
+        return ;
+    }
+
+    lCount = 0;
+    while (1)
+    {
+        memset(&stAlgoDtl, 0, sizeof(TAlgoDtls));
+        EXEC SQL FETCH Cur_algo_dtls INTO :stAlgoDtl;
+        if(SQLERR)
+        {
+            SYSError(RET_DATABASE, "导出代扣流水失败, err:(%d)(%s)", SQLCODE, sDbsError());
+            break;
+        }
+        if(SQLNOTFOUND)
+            break;
+
+        ++ lCount;
+        IBPputstring("algo_date", stAlgoDtl.algo_date);
+        IBPputstring("stlm_date", stAlgoDtl.stlm_date);
+        IBPputstring("tx_date", stAlgoDtl.tx_date);
+        IBPputstring("tx_time", stAlgoDtl.tx_time);
+        IBPputstring("channel_no", stAlgoDtl.channel_no);
+        IBPputstring("pay_type", stAlgoDtl.pay_type);
+        IBPputstring("seq_order", stAlgoDtl.seq_order);
+        IBPputstring("bank_code", stAlgoDtl.bank_code);
+        IBPputstring("mcht_trace_no", stAlgoDtl.mcht_trace_no);
+        IBPputdouble("tx_amt", stAlgoDtl.tx_amt);
+        IBPputdouble("fee_amt", stAlgoDtl.fee_amt);
+        IBPputdouble("settle_amt", stAlgoDtl.tx_amt - stAlgoDtl.fee_amt);
+        IBPputlong("fee_type", stAlgoDtl.fee_type);
+        IBPputlong("disc_cycle", stAlgoDtl.disc_cycle);
+        IBPputstring("settle_num", stAlgoDtl.settle_num);
+        IBPputstring("bank_card_no", stAlgoDtl.bank_card_no);
+        IBPputstring("user_name", stAlgoDtl.user_name);
+        IBPputstring("bank_acc_type", stAlgoDtl.bank_acc_type);
+        IBPputstring("bank_full_name", stAlgoDtl.bank_full_name);
+        IBPputstring("bank_branch_name", stAlgoDtl.bank_branch_name);
+        IBPputstring("bank_areacode", stAlgoDtl.bank_areacode);
+        IBPputstring("cnaps_no", stAlgoDtl.cnaps_no);
+        IBPputstring("cnaps_bankno", stAlgoDtl.cnaps_bankno);
+        IBPputstring("currency", stAlgoDtl.currency);
+        IBPputstring("app_code", stAlgoDtl.app_code);
+        IBPputlong("card_type", stAlgoDtl.card_type);
+        IBPputstring("mert_no", stAlgoDtl.mert_no);
+        IBPputstring("mert_nm", stAlgoDtl.mert_nm);
+        IBPputstring("brh_code", stAlgoDtl.brh_code);
+        IBPputstring("disc_id", stAlgoDtl.disc_id);
+        IBPputstring("cert_type", stAlgoDtl.cert_type);
+        IBPputstring("cert_no", stAlgoDtl.cert_no);
+        IBPputstring("mobile_no", stAlgoDtl.mobile_no);
+        IBPputstring("order_id", stAlgoDtl.order_id);
+        IBPputstring("product_code", stAlgoDtl.product_code);
+        IBPputstring("product_name", stAlgoDtl.product_name);
+        IBPputstring("pay_kind", stAlgoDtl.pay_kind);
+        IBPputstring("remark", stAlgoDtl.remark);
+        lOut = sizeof(szLine); 
+        memset(szLine, 0, sizeof(szLine));
+        if(RC_SUCC != lPackWrite(pstSavm, pstCts->m_lToInMid, szLine, &lOut))
+        {
+            SYSError(RET_DATABASE, "生成导出文件明细失败, err:(%s)", sGetError());
+            break;
+        }    
+
+        fwrite(szLine, lOut, 1, fp);
+        fprintf(fp, "\n");
+        IBPresetuser();
+    }
+    EXEC SQL CLOSE Cur_algo_dtls;
+    fclose(fp);
+
+    IBPresetuser();
+    IBPrace("导出日期(%s)批次流水(%ld)条", szDate, lCount);
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vPutErrorAcct(TSettleErr *pstError)
+    功能描述：入账失败信息放入变量池
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CBill::vPutErrorAcct(TSettleErr *pstError)
+{
+    IBPputstring("currency", pstError->currency);
+    IBPputstring("status", pstError->status);
+    IBPputstring("status_msg", pstError->status_msg);
+    IBPputstring("bank_status", pstError->bank_status);
+    IBPputstring("bank_status_msg", pstError->bank_status_msg);
+    IBPputstring("bank_batch_no", pstError->bank_batch_no);
+    IBPputstring("bank_seqno", pstError->bank_seqno);
+    IBPputstring("resv_phone", pstError->resv_phone);
+    IBPputstring("acct_no", pstError->acct_no);
+    IBPputstring("acct_nm", pstError->acct_nm);
+    IBPputstring("acct_type", pstError->acct_type);
+    IBPputstring("acct_bank_no", pstError->acct_bank_no);
+    IBPputstring("acct_bank_nm", pstError->acct_bank_nm);
+    IBPputstring("acct_zbank_no", pstError->acct_zbank_no);
+    IBPputstring("acct_zbank_nm", pstError->acct_zbank_nm);
+    IBPputstring("acct_zbank_addr", pstError->acct_zbank_addr);
+    IBPputstring("acct_zbank_code", pstError->acct_zbank_code);
+    IBPputstring("acct_union_no", pstError->acct_union_no);
+    IBPputstring("acct_net_no", pstError->acct_net_no);
+    IBPputstring("remark", pstError->remark);
+    IBPputstring("cert_type", pstError->cert_type);
+    IBPputstring("cert_no", pstError->cert_no);
+    IBPputstring("ext_properties", pstError->ext_properties);
+}
+
+/**************************************************************************************************
+    函 数 名：vPutMchtAcct(TSettleTxn *pstSettle)
+    功能描述：清算流水账号新息放入变量池
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CBill::vPutMchtAcct(TSettleTxn *pstSettle)
+{
+    IBPputstring("currency", pstSettle->currency);
+    IBPputstring("status", pstSettle->status);
+    IBPputstring("status_msg", pstSettle->status_msg);
+    IBPputstring("bank_status", pstSettle->bank_status);
+    IBPputstring("bank_status_msg", pstSettle->bank_status_msg);
+    IBPputstring("bank_batch_no", pstSettle->bank_batch_no);
+    IBPputstring("bank_seqno", pstSettle->bank_seqno);
+    IBPputstring("resv_phone", pstSettle->resv_phone);
+    IBPputstring("acct_no", pstSettle->acct_no);
+    IBPputstring("acct_nm", pstSettle->acct_nm);
+    IBPputstring("acct_type", pstSettle->acct_type);
+    IBPputstring("acct_bank_no", pstSettle->acct_bank_no);
+    IBPputstring("acct_bank_nm", pstSettle->acct_bank_nm);
+    IBPputstring("acct_zbank_no", pstSettle->acct_zbank_no);
+    IBPputstring("acct_zbank_nm", pstSettle->acct_zbank_nm);
+    IBPputstring("acct_zbank_addr", pstSettle->acct_zbank_addr);
+    IBPputstring("acct_zbank_code", pstSettle->acct_zbank_code);
+    IBPputstring("acct_union_no", pstSettle->acct_union_no);
+    IBPputstring("acct_net_no", pstSettle->acct_net_no);
+    IBPputstring("remark", pstSettle->remark);
+    IBPputstring("cert_type", pstSettle->cert_type);
+    IBPputstring("cert_no", pstSettle->cert_no);
+    IBPputstring("ext_properties", pstSettle->ext_properties);
+}
+
+/**************************************************************************************************
+    函 数 名：vPutMchtSettle(TMchtFund *pstFund)
+    功能描述：清算商户信息放入变量池
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CBill::vPutMchtSettle(TMchtFund *pstFund)
+{
+    IBPputstring("settle_date", pstFund->settle_date);
+    IBPputstring("settle_num", pstFund->settle_num);
+    IBPputstring("channel_no", pstFund->channel_no);
+    IBPputstring("in_date", pstFund->in_date);
+    IBPputstring("tx_date", pstFund->tx_date);
+    IBPputstring("batch_no", pstFund->batch_no);
+    IBPputstring("trace_no", pstFund->trace_no);
+    IBPputstring("result_flag", pstFund->result_flag);
+    IBPputstring("result_desc", pstFund->result_desc);
+    IBPputlong("tx_num", pstFund->tx_num);
+    IBPputdouble("tx_amt", pstFund->tx_amt);
+    IBPputlong("credit_num", pstFund->credit_num);
+    IBPputdouble("credit_amt", pstFund->credit_amt);
+    IBPputdouble("credit_percent", pstFund->credit_percent);
+    IBPputdouble("fee_amt", pstFund->fee_amt);
+    IBPputdouble("other_fee", pstFund->other_fee);
+    IBPputdouble("repair_amt", pstFund->repair_amt);
+    IBPputdouble("unrepair_amt", pstFund->unrepair_amt);
+    IBPputdouble("uperr_amt", pstFund->uperr_amt);
+    IBPputstring("dc_flag", pstFund->dc_flag);
+    IBPputdouble("settle_amt", pstFund->settle_amt);
+    IBPputstring("mert_no", pstFund->mert_no);
+    IBPputstring("mert_nm", pstFund->mert_nm);
+    IBPputstring("order_req", pstFund->order_req);
+    IBPputstring("order_time", pstFund->order_time);
+    IBPputstring("res", pstFund->res);
+    IBPputstring("pay_time", pstFund->pay_time);
+}
+
+/**************************************************************************************************
+    函 数 名：vUnloadPayDtl()
+    功能描述：卸载代付流水
+    返回说明：
+        无
+ **************************************************************************************************/
+void	CBill::vUnloadPayDtl()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TSettleTxn  stSettle;
+    TMchtFund   stFund;
+    char        szLine[2048], szFile[512];
+    char        szDate[9], szMertNo[21], szType[2];
+    EXEC SQL END DECLARE SECTION;
+    FILE        *fp = NULL;
+    long        lOut = 0, lCount = 0;
+    GCts        *pstCts = (GCts *)pGetGloble();
+    SATvm       *pstSavm = (SATvm *)pGetSATvm();
+
+    memset(szDate, 0, sizeof(szDate));
+    memset(szType, 0, sizeof(szType));
+    memset(szFile, 0, sizeof(szFile));
+    memset(szLine, 0, sizeof(szLine));
+    memset(szMertNo, 0, sizeof(szMertNo));
+    IBPgetstring("BAT_DATE", szDate, "清算日期");
+    IBPgetstring("BAT_MERTNO", szMertNo, "商户编号");
+    if(IBPIserr())
+        return ;
+
+	szType[0] = ACCOUNT_MERT_NO;
+    snprintf(szFile, sizeof(szFile), "%s/settle/SETTLE_%s_%s_DTL.txt", getenv("FILEDIR"), 
+        szDate, szMertNo);
+
+    IBPrace("开始导出日期(%s)清算流水批次文件:%s", szDate, szFile);
+    EXEC SQL DECLARE Cur_settle_bill CURSOR FOR
+        SELECT * FROM TBL_SETTLE_TXN 
+    WHERE SETTLE_DATE = :szDate AND APP_NO = :szMertNo AND APP_TYPE = :szType;
+
+    EXEC SQL OPEN Cur_settle_bill;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "查询商户(%s)代付记录失败, err:(%d)(%s)", szMertNo, 
+            SQLCODE, sDbsError());
+        return ;
+    }
+
+    if(NULL == (fp = fopen(szFile, "wb")))
+    {
+        SYSError(RET_SYSTEM, "打开文件(%s)失败, err:(%d)(%s)", szFile, errno, strerror(errno));
+        return ;
+    }
+
+    while(1)
+    {
+        memset(&stSettle, 0, sizeof(TSettleTxn));
+        EXEC SQL FETCH Cur_settle_bill INTO :stSettle;
+        if(SQLERR)
+        {
+            fclose(fp);
+            SYSError(RET_DATABASE, "获取本地流水失败, err:(%d)(%s)", SQLCODE, sDbsError());
+            EXEC SQL CLOSE Cur_settle_bill;
+            return ;
+        }
+        else if(SQLNOTFOUND)
+            break;
+
+        IBPresetuser();
+		IBPputstring("id", stSettle.id);
+		IBPputstring("pay_order", stSettle.pay_order);
+		IBPputstring("settle_date", stSettle.settle_date);
+		IBPputstring("in_date", stSettle.in_date);
+		IBPputstring("tx_date", stSettle.tx_date);
+		IBPputstring("settle_num", stSettle.settle_num);
+		IBPputstring("channel_no", stSettle.channel_no);
+		IBPputstring("batch_no", stSettle.batch_no);
+		IBPputstring("trace_no", stSettle.trace_no);
+		IBPputstring("app_type", stSettle.app_type);
+		IBPputstring("app_no", stSettle.app_no);
+		IBPputstring("app_nm", stSettle.app_nm);
+		IBPputstring("pay_acct", stSettle.pay_acct);
+		IBPputstring("currency", stSettle.currency);
+		IBPputstring("result_flag", stSettle.result_flag);
+		IBPputstring("status", stSettle.status);
+		IBPputstring("status_msg", stSettle.status_msg);
+		IBPputstring("bank_status", stSettle.bank_status);
+		IBPputstring("bank_status_msg", stSettle.bank_status_msg);
+		IBPputstring("bank_batch_no", stSettle.bank_batch_no);
+		IBPputstring("bank_seqno", stSettle.bank_seqno);
+		IBPputstring("resv_phone", stSettle.resv_phone);
+		IBPputstring("acct_no", stSettle.acct_no);
+		IBPputstring("acct_nm", stSettle.acct_nm);
+		IBPputstring("acct_type", stSettle.acct_type);
+		IBPputstring("acct_bank_no", stSettle.acct_bank_no);
+		IBPputstring("acct_bank_nm", stSettle.acct_bank_nm);
+		IBPputstring("acct_zbank_no", stSettle.acct_zbank_no);
+		IBPputstring("acct_zbank_nm", stSettle.acct_zbank_nm);
+		IBPputstring("acct_zbank_addr", stSettle.acct_zbank_addr);
+		IBPputstring("acct_zbank_code", stSettle.acct_zbank_code);
+		IBPputstring("acct_union_no", stSettle.acct_union_no);
+		IBPputstring("acct_net_no", stSettle.acct_net_no);
+		IBPputstring("remark", stSettle.remark);
+		IBPputstring("cert_type", stSettle.cert_type);
+		IBPputstring("cert_no", stSettle.cert_no);
+		IBPputstring("product_code", stSettle.product_code);
+		IBPputstring("create_time", stSettle.create_time);
+		IBPputlong("card_type", stSettle.card_type);
+		IBPputdouble("settle_amt", stSettle.settle_amt);
+		IBPputdouble("settle_fee", stSettle.settle_fee);
+        
+        lOut = sizeof(szLine); 
+        memset(szLine, 0, sizeof(szLine));
+        if(RC_SUCC != lPackWrite(pstSavm, pstCts->m_lToInMid, szLine, &lOut))
+        {
+            fclose(fp);
+            SYSError(RET_DATABASE, "生成导出文件明细失败, err:(%s)", sGetError());
+            EXEC SQL CLOSE Cur_settle_bill;
+            return ;
+        }    
+
+        lCount ++;
+        fwrite(szLine, lOut, 1, fp);
+        fprintf(fp, "\n");
+    }
+    fclose(fp);
+    EXEC SQL CLOSE Cur_settle_bill;
+    IBPresetuser();
+
+    IBPrace("导出商户(%s)代付流水成功, 有效记录(%d)", szMertNo, lCount);
+
+    return ;
+}
+
+/*************************************************************************************************
+    组件函数
+**************************************************************************************************/
+void    CBill::vUnloadSettle()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TSettleErr  stError;
+    TSettleTxn  stSettle;
+    TMchtFund   stFund;
+    char        szDate[9], szMertNo[21];
+    char        szLine[2048], szFile[512];
+    EXEC SQL END DECLARE SECTION;
+    FILE        *fp = NULL;
+    long        lOut = 0, lCount = 0;
+    GCts        *pstCts = (GCts *)pGetGloble();
+    SATvm       *pstSavm = (SATvm *)pGetSATvm();
+
+    memset(szDate, 0, sizeof(szDate));
+    memset(szFile, 0, sizeof(szFile));
+    memset(szLine, 0, sizeof(szLine));
+    memset(szMertNo, 0, sizeof(szMertNo));
+    IBPgetstring("BAT_DATE", szDate, "清算日期");
+    IBPgetstring("BAT_MERTNO", szMertNo, "商户编号");
+    if(IBPIserr())
+        return ;
+
+    snprintf(szFile, sizeof(szFile), "%s/settle/SETTLE_%s_%s_DTL.txt", getenv("FILEDIR"), 
+        szDate, szMertNo);
+
+    IBPrace("开始导出日期(%s)清算流水批次文件:%s", szDate, szFile);
+    EXEC SQL DECLARE Cur_mcht_bill CURSOR FOR
+        SELECT * FROM TBL_MCHT_FUND 
+    WHERE SETTLE_DATE = :szDate AND MERT_NO = :szMertNo;
+
+    EXEC SQL OPEN Cur_mcht_bill;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "查询商户(%s)代付记录失败, err:(%d)(%s)", szMertNo, 
+            SQLCODE, sDbsError());
+        return ;
+    }
+
+    if(NULL == (fp = fopen(szFile, "wb")))
+    {
+        SYSError(RET_SYSTEM, "打开文件(%s)失败, err:(%d)(%s)", szFile, errno, strerror(errno));
+        return ;
+    }
+
+    while(1)
+    {
+        memset(&stFund, 0, sizeof(TMchtFund));
+        EXEC SQL FETCH Cur_mcht_bill INTO :stFund;
+        if(SQLERR)
+        {
+            fclose(fp);
+            SYSError(RET_DATABASE, "获取本地流水失败, err:(%d)(%s)", SQLCODE, sDbsError());
+            EXEC SQL CLOSE Cur_mcht_bill;
+            return ;
+        }
+        else if(SQLNOTFOUND)
+            break;
+
+        IBPresetuser();
+        EXEC SQL SELECT * INTO :stError FROM TBL_SETTLE_ERR WHERE ID = :stFund.id;
+        if(SQLERR)
+        {
+            fclose(fp);
+            SYSError(RET_DATABASE, "查询商户(%s)代付失败记录失败, err:(%d)(%s)", szMertNo, 
+                SQLCODE, sDbsError());
+            EXEC SQL CLOSE Cur_mcht_bill;
+            return ;
+        }
+        else if(SQLNOTFOUND)
+        {
+            EXEC SQL SELECT * INTO :stSettle FROM 
+                (SELECT * FROM TBL_SETTLE_TXN ORDER BY create_time DESC) WHERE ROWNUM = 1;
+            if(SQLCODE)
+            {
+                fclose(fp);
+                SYSError(RET_DATABASE, "查询商户(%s)代付清算明细失败, err:(%d)(%s)", szMertNo, 
+                    SQLCODE, sDbsError());
+                EXEC SQL CLOSE Cur_mcht_bill;
+                return ;
+            }
+        
+            vPutMchtAcct(&stSettle);
+        }
+        else
+            vPutErrorAcct(&stError);
+        vPutMchtSettle(&stFund);
+        
+        lOut = sizeof(szLine); 
+        memset(szLine, 0, sizeof(szLine));
+        if(RC_SUCC != lPackWrite(pstSavm, pstCts->m_lToInMid, szLine, &lOut))
+        {
+            fclose(fp);
+            SYSError(RET_DATABASE, "生成导出文件明细失败, err:(%s)", sGetError());
+               EXEC SQL CLOSE Cur_mcht_bill;
+            return ;
+        }    
+
+        lCount ++;
+        fwrite(szLine, lOut, 1, fp);
+        fprintf(fp, "\n");
+    }
+    fclose(fp);
+    EXEC SQL CLOSE Cur_mcht_bill;
+    IBPresetuser();
+
+    IBPrace("导出商户(%s)代付流水成功, 有效记录(%d)", szMertNo, lCount);
+
+    return ;
+}
+
+/*************************************************************************************************
+    code end
+**************************************************************************************************/

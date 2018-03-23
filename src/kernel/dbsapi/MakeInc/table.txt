@@ -1,0 +1,12 @@
+tbl_bat_main_list
+tbl_order_succ
+tbl_order_err
+tbl_cups_succ
+tbl_algo_dtls
+tbl_mcht_fund
+tbl_settle_err
+tbl_settle_txn
+tbl_settle_mon
+tbl_cash_account
+tbl_channel_account
+tbl_account_detail

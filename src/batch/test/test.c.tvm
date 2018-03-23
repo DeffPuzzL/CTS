@@ -1,0 +1,161 @@
+#include    "cts.h"
+#include    "tvm.h"
+#include    "dbsapi.h"
+
+void	vTestExtre()
+{
+	CtsHost	stHost;
+	CtsFlow	stFlow;
+    SATvm   *pstSavm = (SATvm *)pGetSATvm();
+
+#if		1
+    memset(&stHost, 0, sizeof(stHost));
+    pstSavm->pstVoid  = NULL;
+    pstSavm->lReMatch = MATCH_MAX;
+    pstSavm->lFind    = IDX_SELECT;
+    pstSavm->tblName  = CTS_TRADE_HOST;
+    pstSavm->lSize    = sizeof(CtsHost);
+    pstSavm->lReField = ReField(CtsHost, m_lHost);
+    lExtreme(pstSavm, &stHost);
+
+	fprintf(stderr, "执行计划(%d), %s, 极值:%d\n", pstSavm->m_lEType, sGetError(), stHost.m_lHost); 
+#else
+    memset(&stFlow, 0, sizeof(stFlow));
+    pstSavm->pstVoid  = NULL;
+    pstSavm->lReMatch = MATCH_MIN;
+    pstSavm->lFind    = IDX_SELECT;
+    pstSavm->tblName  = CTS_TRADE_FLOW;
+    pstSavm->lSize    = sizeof(CtsFlow);
+    pstSavm->lReField = ReField(CtsFlow, m_lSvrID);
+    lExtreme(pstSavm, &stFlow);
+
+
+	fprintf(stderr, "执行计划(%d), %s, 极值:%d\n", pstSavm->m_lEType, sGetError(), stFlow.m_lSvrID); 
+#endif
+}
+
+void	vTestGroup()
+{
+	CtsHost	 stHost;
+	CtsClass stClass;
+	CtsPack  stPack;
+    size_t   i = 0, lCount = 0;
+	Rowgrp	 *pstNode, *pstList = NULL;
+    SATvm    *pstSavm = (SATvm *)pGetSATvm();
+
+#if		1
+    memset(&stHost, 0, sizeof(stHost));
+	stHost.m_lHost = 15;
+    pstSavm->pstVoid  = NULL;
+    pstSavm->lReMatch = GROUP_BY | ORDER_DESC;
+    pstSavm->lFind    = IDX_SELECT;
+    pstSavm->tblName  = CTS_TRADE_HOST;
+    pstSavm->lSize    = sizeof(CtsHost);
+    pstSavm->lReField = ReField(CtsHost, m_szPGName);
+    if(RC_SUCC != lGroup(pstSavm, &pstList))
+	{
+		fprintf(stderr, "执行计划(%d), %s\n", pstSavm->m_lEType, sGetError());
+		return ;
+	}
+
+    for(pstNode = pstList; pstNode; pstNode = pstNode->pstNext)
+		fprintf(stdout, "%s, %d\n", (char *)pstNode->psvData, pstNode->lCount);
+	IBPFgrp(pstList);
+
+	fprintf(stderr, "执行计划(%d), %s, 有效记录(%d)\n", pstSavm->m_lEType, sGetError(), pstSavm->m_lEffect);
+#else
+    memset(&stPack, 0, sizeof(CtsPack));
+    pstSavm->pstVoid  = NULL;
+    pstSavm->lReMatch = GROUP_BY;
+    pstSavm->lFind    = IDX_SELECT;
+    pstSavm->tblName  = CTS_PACK_CONFIG;
+    pstSavm->lSize    = sizeof(CtsPack);
+    pstSavm->lReField = ReField(CtsPack, m_lSeq);
+    if(RC_SUCC != lGroup(pstSavm, &pstList))
+	{
+		fprintf(stderr, "执行计划(%d), %s\n", pstSavm->m_lEType, sGetError());
+		return ;
+	}
+
+    for(pstNode = pstList; pstNode; pstNode = pstNode->pstNext)
+		fprintf(stdout, "%d, %d\n", *((long *)pstNode->psvData), pstNode->lCount);
+	IBPFgrp(pstList);
+
+	fprintf(stderr, "执行计划(%d), %s, 有效记录(%d)\n", pstSavm->m_lEType, sGetError(), pstSavm->m_lEffect);
+#endif
+
+	return ;
+}
+
+/****************************************************************************************
+
+****************************************************************************************/
+int     main(int argc, char *argv[])
+{
+	CtsClass stClass;
+    size_t  i = 0, lCount = 0;
+	CtsHost	 stHost, *pstHost = NULL;
+	Rowgrp	 *pstNode, *pstList = NULL;
+    SATvm   *pstSavm = (SATvm *)pGetSATvm();
+
+	lInitRunTest(basename(argv[0]));
+
+#if		1
+    memset(&stHost, 0, sizeof(stHost));
+	stHost.m_lEnum = 2;
+    pstSavm->pstVoid  = NULL;
+    pstSavm->lReMatch = GROUP_BY | ORDER_ASC;
+    pstSavm->lFind    = IDX_SELECT;
+    pstSavm->tblName  = CTS_TRADE_HOST;
+    pstSavm->lSize    = sizeof(CtsHost);
+    pstSavm->lReField = ReField(CtsHost, m_szPGName);
+    if(RC_SUCC != lQuery(pstSavm, &lCount, (void **)&pstList))
+	{
+		fprintf(stderr, "执行计划(%d), %s\n", pstSavm->m_lEType, sGetError());
+		return RC_FAIL;
+	}
+
+    for(pstNode = pstList; pstNode; pstNode = pstNode->pstNext)
+		fprintf(stdout, "%s, %d\n", (char *)pstNode->psvData, pstNode->lCount);
+	IBPFgrp(pstList);
+/*
+    for(i = 0; i < lCount; i ++)
+	{
+        fprintf(stdout, "%4d|%d|%d|%25s|%12s|%10s|%5d|%4d|\n", pstHost[i].m_lHost, 
+			pstHost[i].m_lType, pstHost[i].m_lEnum, pstHost[i].m_szName, pstHost[i].m_szPGName, 
+			pstHost[i].m_szHostIp, pstHost[i].m_lHostPort, pstHost[i].m_lTimeOut);
+	}
+	IBPFree(pstHost);
+*/
+
+	fprintf(stderr, "执行计划(%d), %s, 有效记录(%d)\n", pstSavm->m_lEType, sGetError(), pstSavm->m_lEffect);
+#else
+    memset(&stPack, 0, sizeof(CtsPack));
+    pstSavm->pstVoid  = NULL;
+    pstSavm->lReMatch = GROUP_BY;
+    pstSavm->lFind    = IDX_SELECT;
+    pstSavm->tblName  = CTS_PACK_CONFIG;
+    pstSavm->lSize    = sizeof(CtsPack);
+    pstSavm->lReField = ReField(CtsPack, m_lSeq);
+    if(RC_SUCC != lGroup(pstSavm, &pstList))
+	{
+		fprintf(stderr, "执行计划(%d), %s\n", pstSavm->m_lEType, sGetError());
+		return RC_FAIL;
+	}
+
+    for(pstNode = pstList; pstNode; pstNode = pstNode->pstNext)
+		fprintf(stdout, "%d, %d\n", *((long *)pstNode->psvData), pstNode->lCount);
+	IBPFgrp(pstList);
+
+	fprintf(stderr, "执行计划(%d), %s, 有效记录(%d)\n", pstSavm->m_lEType, sGetError(), pstSavm->m_lEffect);
+#endif
+
+    return RC_SUCC;
+}
+
+
+
+
+/****************************************************************************************
+    code end
+****************************************************************************************/

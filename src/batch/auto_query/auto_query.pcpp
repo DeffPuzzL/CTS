@@ -1,0 +1,201 @@
+/**************************************************************************************************
+    文 件 名：demo.pc
+    代码作者：DeffPuzzL
+    编写版本：
+    创建日期：2016-07-14
+    功能描述：demo实现业务模块
+ **************************************************************************************************/
+#include    "auto_query.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+#include    "tbl_settle_mon.h"
+EXEC SQL END DECLARE SECTION;
+
+/**************************************************************************************************
+    方法定义
+ **************************************************************************************************/
+CQuery::stEvent CQuery::m_stEvent[] =
+{
+    { "", NULL }
+};
+
+/**************************************************************************************************
+    函 数 名：CQuery()
+    功能描述：构造函数
+    返回说明：
+ **************************************************************************************************/
+CQuery::CQuery()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：~CQuery()
+    功能描述：析构函数
+    返回说明：
+ **************************************************************************************************/
+CQuery::~CQuery()
+{
+
+
+}
+
+/**************************************************************************************************
+    函 数 名：lRunObject(char* in_szClass, char* in_szAction)
+    功能描述：运行类中的方法
+    返回说明：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ **************************************************************************************************/
+long    CQuery::lRunObject(char *in_szClass, char *in_szAction)
+{
+    int     i = 0;
+    char    *p, szAction[256];
+
+    memset(szAction, 0, sizeof(szAction));
+
+    if ((p = strstr(in_szAction, "__")) != NULL)
+    {
+        strncpy(szAction, in_szAction, p - in_szAction);
+    }
+    else
+    {
+        strcpy(szAction, in_szAction);
+    }
+
+    while (0 != strcmp(m_stEvent[i].m_szName, ""))
+    {
+        if (0 == strcmp(m_stEvent[i].m_szName, szAction))
+        {
+            (this->*m_stEvent[i].m_pEvent)();
+            return RC_SUCC;
+        }
+
+        i++;
+    }
+
+    SYSError(RET_SYSTEM, "组件(%s)的事件(%s)没注册", in_szClass, in_szAction);
+    return RC_FAIL;
+}
+
+/************************************************************************************
+	函数定义 ：lGetTimeDiff(char *pszTime, long lTime)
+	函数说明 ：计算时间差
+    返回说明 ：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ *************************************************************************************/
+long    CQuery::lGetTimeDiff(char *pszTime, long lTime)
+{
+    struct tm tm1;
+
+    sscanf(pszTime, "%04d%02d%02d%02d%02d%02d", &tm1.tm_year, &tm1.tm_mon, 
+		&tm1.tm_mday, &tm1.tm_hour, &tm1.tm_min, &tm1.tm_sec);
+
+    tm1.tm_mon -= 1;
+    tm1.tm_year -= 1900;
+    return (long)fabs(mktime(&tm1) - lTime);
+}
+
+/************************************************************************************
+	函数定义 ：vAutoCheckTxn(SATvm *pstSavm, long lSleep, CtsProcess *pstProcess)
+	函数说明 ：遍历监控流水表记录
+    返回说明 ：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ ************************************************************************************/
+void    CQuery::vAutoCheckTxn(SATvm *pstSavm, long lSleep, CtsProcess *pstProcess)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+	TSettleMon	stMon;
+    long        i, lCount;
+    EXEC SQL END DECLARE SECTION;
+
+    EXEC SQL DECLARE Cur_settle_mon CURSOR FOR
+        SELECT NVL(ID, ' '), QUE_CNT, RESULT_FLAG, REC_UPD_TS, NVL(MARK, ' ')
+    FROM TBL_SETTLE_MON WHERE QUE_CNT > 0
+       AND to_date(REC_CRT_TS,'yyyymmddhh24miss') < (sysdate-15/24/60/60)
+        AND NVL(RESV, 0) < 14 ORDER BY ID;
+
+    EXEC SQL OPEN Cur_settle_mon;
+    if(SQLCODE)
+    {
+        IBPerror("打开游标失败, err:(%d)(%s)", SQLCODE, sDbsError());
+        return ;
+    }
+
+    while(1)
+    {
+		memset(&stMon, 0, sizeof(TSettleMon));
+        EXEC SQL FETCH Cur_settle_mon INTO :stMon.id, :stMon.que_cnt, 
+			:stMon.result_flag, :stMon.rec_upd_ts, :stMon.mark;
+        if(SQLCODE == DBS_NOTFOUND)
+            break;
+        else if(SQLCODE)
+        {
+            IBPerror("查询交易监控记录明细出错, err:(%d)(%s)", SQLCODE, sDbsError());
+            EXEC SQL CLOSE Cur_settle_mon;
+            return ;
+        }
+
+        lCount ++;
+        sTrimAll(stMon.id);
+        sTrimAll(stMon.mark);
+        sTrimAll(stMon.rec_upd_ts);
+        if(lGetTimeDiff(stMon.rec_upd_ts, (long)time(NULL)) < (long)pow(2, atol(stMon.mark)))
+            continue;
+
+        ++ i;
+        IBPputstring("id", stMon.id);
+        IBPputstring("pay_acct", stMon.mark);
+
+        IBPrace("监控到未知状态流水(%s)还需查询次数(%d)", stMon.id, stMon.que_cnt);
+        if(RC_FAIL == lNewTrade(pstSavm, (GCts *)pGetGloble(), "200001", true))
+        {
+            SYSError(RET_SYSTEM, "调用新交易(200001)失败, err:%s", sGetError());
+        	lMonitorEvent(pstSavm, pstProcess);
+            continue;
+        }
+        
+    	IBPgetdefstring("pay_Status", stMon.result_flag, "3");
+		//	更新监控流水表
+        if(SETTLE_IN_FLAG_SUCC == stMon.result_flag[0])
+			continue;
+        
+		memcpy(stMon.rec_upd_ts, sGetCurrentTime(), sizeof(stMon.rec_upd_ts) - 1);	
+        if(SETTLE_IN_FLAG_FAIL == stMon.result_flag[0])
+        {
+            EXEC SQL UPDATE TBL_SETTLE_MON SET
+                QUE_CNT     = QUE_CNT - 1,
+                RESULT_FLAG = :stMon.result_flag,
+                REC_UPD_TS  = :stMon.rec_upd_ts
+            WHERE ID        = :stMon.id;
+        }
+        else
+        {
+            EXEC SQL UPDATE TBL_SETTLE_MON SET
+                RESV        = RESV + 1,
+                RESULT_FLAG = :stMon.result_flag,
+                REC_UPD_TS  = :stMon.rec_upd_ts
+            WHERE ID        = :stMon.id;
+        }
+        if(SQL_UD_ERR)
+        {
+            SYSError(RET_DATABASE, "更新监控流水(%s)状态(%s)失败, (%s)", stMon.id,
+                stMon.result_flag, sDbsError());
+            return ;
+        }
+
+        lMonitorEvent(pstSavm, pstProcess);
+    }
+    EXEC SQL CLOSE Cur_settle_mon;
+    IBPrace("本次轮询完毕，处理笔数(%d/%d), 待(%d)秒进行下次轮询!", i, lCount, lSleep);
+
+    return ;
+}
+
+/*************************************************************************************************
+    code end
+**************************************************************************************************/

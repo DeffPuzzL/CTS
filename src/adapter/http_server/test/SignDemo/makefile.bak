@@ -1,0 +1,19 @@
+
+all:	sign
+
+CFLAGS=-g -c  -Wall
+
+APPLIBS= -lssl -lcrypto 
+
+CC=cc 
+
+.SUFFIXES:	.h .c .o
+
+.c.o:
+	$(CC) $(CFLAGS)  -o $*.o  $*.c 
+
+sign: main.o opsslpub.o
+	@echo Building "sign..."
+	$(CC) -o $@ $? $(APPLIBS) 
+clean:
+	rm -f *.o sign

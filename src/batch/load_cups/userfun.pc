@@ -1,0 +1,204 @@
+/************************************************************************************
+ *  功  能: 任务分裂
+ *  Author: DeffPuzzL
+ *  Edit History:2015/11/23
+ ************************************************************************************/
+#include "face.h"
+#include "cups.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+#include "tbl_order_err.h"
+EXEC SQL END DECLARE SECTION;
+
+//  对于冲正撤销类自调函数 pstVoid为ReList结构, pstCom为NULL
+//  对于手续费检查pstVoid为TCupSucc结构， pstCom为费率模型
+/************************************************************************************/
+/*   声明  ： long Cntp_FeeCheck(char *pszCupsNo, char *pszDate, char *pszValue)	*/
+/*   功能  ： 计算应收商户手续费													*/
+/*  返回值 ： RC_SUCC	  --  成功													*/
+/*			RC_FAIL	  --  失败														*/
+/************************************************************************************/
+long	lHdsy_AbolishTrade(void *pstVoid, void *pstCom)
+{
+	ReList	  *pstReList = (ReList *)pstVoid;
+
+	IBPrace("开始撤销");
+
+	while (pstReList)
+	{
+		IBPrace("撤销流水(%s)(%s)", pstReList->m_szSysRefNo, pstReList->m_szTxDate);
+		pstReList = pstReList->pstNext;
+	}
+
+	return RC_SUCC;
+}
+
+/************************************************************************************/
+/*   声明  ： long lToYuan(char *pszCupsNo, char *pszDate, char *pszValue,			*/
+/*				  long *plValueLen)													*/
+/*   功能  ： 将以分为单位的金额转换为以元为单位									*/
+/*  返回值 ： RC_SUCC	  --  成功													*/
+/*			RC_FAIL	  --  失败														*/
+/************************************************************************************/
+long	lToYuan(char *pszCupsNo, char *pszDate, char *pszValue, long *plValueLen)
+{
+	char szTemp[100];
+	memset(szTemp, 0, sizeof(szTemp));
+	strcpy(szTemp, pszValue);
+	sTrimAll(szTemp);
+	sprintf(pszValue, "%.2f", atof(szTemp) / 100.00);
+	return RC_SUCC;
+}
+
+/************************************************************************************/
+/*   声明  ： long lFixAlpyDate(char *pszCupsNo, char *pszDate, char *pszValue,		*/
+/*				  long *plValueLen)													*/
+/*   功能  ： 将alpy的日期格式转换为标准格式										*/
+/*  返回值 ： RC_SUCC	  --  成功													*/
+/*			RC_FAIL	  --  失败														*/
+/************************************************************************************/
+long	lFixAlpyDate(char *pszCupsNo, char *pszDate, char *pszValue, long *plValueLen)
+{
+	char szTemp[100];
+	memset(szTemp, 0, sizeof(szTemp));
+	strcpy(szTemp, pszValue);
+	memset(pszValue, 0, strlen(pszValue));
+	memcpy(pszValue, szTemp, 4);
+	memcpy(pszValue + 4, szTemp + 5, 2);
+	memcpy(pszValue + 6, szTemp + 8, 2);
+
+	return RC_SUCC;
+}
+
+/************************************************************************************/
+/*   声明  ： long lFixAlpyTime(char *pszCupsNo, char *pszDate, char *pszValue,		*/
+/*				  long *plValueLen)													*/
+/*   功能  ： 将alpy的时间格式转换为标准格式										*/
+/*  返回值 ： RC_SUCC	  --  成功													*/
+/*			RC_FAIL	  --  失败														*/
+/************************************************************************************/
+long	lFixAlpyTime(char *pszCupsNo, char *pszDate, char *pszValue, long *plValueLen)
+{
+	char szTemp[100];
+	memset(szTemp, 0, sizeof(szTemp));
+	strcpy(szTemp, pszValue);
+	memset(pszValue, 0, strlen(pszValue));
+	memcpy(pszValue, szTemp + 11, 2);
+	memcpy(pszValue + 2, szTemp + 14, 2);
+	memcpy(pszValue + 4, szTemp + 17, 2);
+
+	return RC_SUCC;
+}
+
+/************************************************************************************/
+/*   声明  ： long lFixZmkjTime(char *pszCupsNo, char *pszDate, char *pszValue,		*/
+/*				  long *plValueLen)													*/
+/*   功能  ： 将zmkj的时间格式转换为标准格式										*/
+/*  返回值 ： RC_SUCC	  --  成功													*/
+/*			RC_FAIL	  --  失败														*/
+/************************************************************************************/
+long	lFixZmkjTime(char *pszCupsNo, char *pszDate, char *pszValue, long *plValueLen)
+{
+	int i = 0;
+	char *p = NULL;
+	char *q = NULL;
+	char szTemp[128] = {0};
+
+	strcpy(szTemp, pszValue + 11);
+	memset(pszValue, 0, strlen(pszValue));
+
+	for (p = szTemp; i < 3; p = q + 1, i++)
+	{
+		if ((q = strchr(p, ':')))
+		{
+			*q = 0;
+		}
+
+		switch (strlen(p))
+		{
+			case 0:
+				strcat(pszValue, "00");
+				break;
+
+			case 1:
+				strcat(pszValue, "0");
+				strcat(pszValue, p);
+				break;
+
+			case 2:
+				strcat(pszValue, p);
+				break;
+
+			default:
+				return RC_FAIL;
+		}
+	}
+
+	return RC_SUCC;
+}
+
+/************************************************************************************/
+/*   声明  ： long lFixAlpyTime(char *pszCupsNo, char *pszDate, char *pszValue,		*/
+/*				  long *plValueLen)													*/
+/*   功能  ： 将alpy的时间格式转换为标准格式										*/
+/*  返回值 ： RC_SUCC	  --  成功													*/
+/*			RC_FAIL	  --  失败														*/
+/************************************************************************************/
+long	lFixXywxTime(char *pszCupsNo, char *pszDate, char *pszValue, long *plValueLen)
+{
+	char szTemp[100];
+	memset(szTemp, 0, sizeof(szTemp));
+	strcpy(szTemp, pszValue);
+	memset(pszValue, 0, strlen(pszValue));
+	memcpy(pszValue, szTemp + 12, 2);
+	memcpy(pszValue + 2, szTemp + 15, 2);
+	memcpy(pszValue + 4, szTemp + 18, 2);
+
+	return RC_SUCC;
+}
+
+/************************************************************************************/
+/*   声明  ： long lFixAcno(char *pszCupsNo, char *pszDate, char *pszValue,			*/
+/*				  long *plValueLen)													*/
+/*   功能  ： 在缩略卡号中间加上"*"													*/
+/*  返回值 ： RC_SUCC	  --  成功													*/
+/*			RC_FAIL	  --  失败														*/
+/************************************************************************************/
+long	lFixAcno(char *pszCupsNo, char *pszDate, char *pszValue, long *plValueLen)
+{
+	char szTemp[100];
+
+	memset(szTemp, 0, sizeof(szTemp));
+	strcpy(szTemp, pszValue); //  卡号
+	sTrimAll(szTemp);
+	memcpy(pszValue, szTemp, 6);
+	memcpy(pszValue + 6, "****", 4);
+	memcpy(pszValue + 10, szTemp + 6, 4);
+
+	return RC_SUCC;
+}
+
+long	lGetSysTraceNo(char *pszCupsNo, char *pszDate, char *pszValue, long *plValueLen)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		long iT0Seqno;
+	EXEC SQL END DECLARE SECTION;
+
+	iT0Seqno = 0;
+	EXEC SQL SELECT seq_txn_no.nextval
+		INTO :iT0Seqno
+		FROM dual;
+
+	if (sqlca.sqlcode)
+	{
+		IBPrace("sqlca.sqlcode:%d", sqlca.sqlcode);
+		return RC_FAIL;
+	}
+
+	memset(pszValue, 0, *plValueLen);
+	sprintf(pszValue, "%012ld", iT0Seqno);
+
+	return RC_SUCC;
+}

@@ -1,0 +1,318 @@
+/*
+ *  Copyright 2006, Shanghai Huateng Software Systems Co., Ltd.
+ *  All right reserved.
+ *
+ *  THIS IS UNPUBLISHED PROPRIETARY SOURCE CODE OF SHANGHAI HUATENG
+ *  SOFTWARE SYSTEMS CO., LTD.  THE CONTENTS OF THIS FILE MAY NOT
+ *  BE DISCLOSED TO THIRD PARTIES, COPIED OR DUPLICATED IN ANY FORM,
+ *  IN WHOLE OR IN PART, WITHOUT THE PRIOR WRITTEN PERMISSION OF
+ *  SHANGHAI HUATENG SOFTWARE SYSTEMS CO., LTD.
+ *
+ *  $Id$
+ *
+ *  function: table tbl_r_txn operator function
+ *
+ *  Edit History:
+ *
+ *    2017/08/15 09:18:27 by gendb
+ */
+ 
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include "dbs/dbsdef.h"
+EXEC SQL include sqlca;
+EXEC SQL include sqlda;
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+struct TBL_R_TXN_Def {
+    int        id;    /*  */
+    char       tx_date[9];    /*  */
+    char       tx_time[11];    /*  */
+    char       stat[2];    /*  */
+    char       order_no[21];    /*  */
+    char       tx_code[21];    /*  */
+    double     tx_amt;    /*  */
+    char       card_type[3];    /*  */
+    int        disc_cycle;    /*  */
+    char       ibox42[26];    /*  */
+    char       brno[21];    /*  */
+    char       scan_mode[2];    /*  */
+    char       region_code[7];    /*  */
+    char       license_type[5];    /*  */
+    char       ch_respcd[9];    /*  */
+    char       rt_respcd[9];    /*  */
+    char       cha_nm[9];    /*  */
+    char       cha_modid[13];    /*  */
+    char       cha_merno[26];    /*  */
+    char       chld_merno[21];    /*  */
+    char       cha_zsnm[9];    /*  */
+    int        resv1;    /*  */
+    char       resv2[33];    /*  */
+    char       resv3[257];    /*  */
+} ltTBL_R_TXN;
+short s_ind;
+char  s_count[33];
+EXEC SQL END DECLARE SECTION;
+/*************************************************************************/
+/*    input : DBS_FUNC   the dbs func                                    */
+/*            The struct pointer defined in upper.                       */
+/*    return : the sqlca.sqlcode                                         */
+/*************************************************************************/
+int DbsTBL_R_TXN(int ifunc, struct TBL_R_TXN_Def *pTBL_R_TXN)
+{
+    memcpy(&ltTBL_R_TXN, pTBL_R_TXN, sizeof(ltTBL_R_TXN));
+
+    switch (ifunc) {
+    case DBS_SELECT1 :
+        EXEC SQL SELECT
+            ID ,
+            TX_DATE ,
+            TX_TIME ,
+            STAT ,
+            ORDER_NO ,
+            TX_CODE ,
+            TX_AMT ,
+            CARD_TYPE ,
+            DISC_CYCLE ,
+            IBOX42 ,
+            BRNO ,
+            SCAN_MODE ,
+            REGION_CODE ,
+            LICENSE_TYPE ,
+            CH_RESPCD ,
+            RT_RESPCD ,
+            CHA_NM ,
+            CHA_MODID ,
+            CHA_MERNO ,
+            CHLD_MERNO ,
+            CHA_ZSNM ,
+            RESV1 ,
+            RESV2 ,
+            RESV3
+        INTO
+            :ltTBL_R_TXN.id :s_ind ,
+            :ltTBL_R_TXN.tx_date :s_ind ,
+            :ltTBL_R_TXN.tx_time :s_ind ,
+            :ltTBL_R_TXN.stat :s_ind ,
+            :ltTBL_R_TXN.order_no :s_ind ,
+            :ltTBL_R_TXN.tx_code :s_ind ,
+            :ltTBL_R_TXN.tx_amt :s_ind ,
+            :ltTBL_R_TXN.card_type :s_ind ,
+            :ltTBL_R_TXN.disc_cycle :s_ind ,
+            :ltTBL_R_TXN.ibox42 :s_ind ,
+            :ltTBL_R_TXN.brno :s_ind ,
+            :ltTBL_R_TXN.scan_mode :s_ind ,
+            :ltTBL_R_TXN.region_code :s_ind ,
+            :ltTBL_R_TXN.license_type :s_ind ,
+            :ltTBL_R_TXN.ch_respcd :s_ind ,
+            :ltTBL_R_TXN.rt_respcd :s_ind ,
+            :ltTBL_R_TXN.cha_nm :s_ind ,
+            :ltTBL_R_TXN.cha_modid :s_ind ,
+            :ltTBL_R_TXN.cha_merno :s_ind ,
+            :ltTBL_R_TXN.chld_merno :s_ind ,
+            :ltTBL_R_TXN.cha_zsnm :s_ind ,
+            :ltTBL_R_TXN.resv1 :s_ind ,
+            :ltTBL_R_TXN.resv2 :s_ind ,
+            :ltTBL_R_TXN.resv3 :s_ind
+        FROM
+            tbl_r_txn
+        WHERE
+            ORDER_NO = :ltTBL_R_TXN.order_no;
+
+        memcpy(pTBL_R_TXN, &ltTBL_R_TXN, sizeof(ltTBL_R_TXN));
+        break;
+
+    case DBS_LOCK1 :
+        EXEC SQL SELECT
+            ID ,
+            TX_DATE ,
+            TX_TIME ,
+            STAT ,
+            ORDER_NO ,
+            TX_CODE ,
+            TX_AMT ,
+            CARD_TYPE ,
+            DISC_CYCLE ,
+            IBOX42 ,
+            BRNO ,
+            SCAN_MODE ,
+            REGION_CODE ,
+            LICENSE_TYPE ,
+            CH_RESPCD ,
+            RT_RESPCD ,
+            CHA_NM ,
+            CHA_MODID ,
+            CHA_MERNO ,
+            CHLD_MERNO ,
+            CHA_ZSNM ,
+            RESV1 ,
+            RESV2 ,
+            RESV3
+        INTO
+            :ltTBL_R_TXN.id :s_ind ,
+            :ltTBL_R_TXN.tx_date :s_ind ,
+            :ltTBL_R_TXN.tx_time :s_ind ,
+            :ltTBL_R_TXN.stat :s_ind ,
+            :ltTBL_R_TXN.order_no :s_ind ,
+            :ltTBL_R_TXN.tx_code :s_ind ,
+            :ltTBL_R_TXN.tx_amt :s_ind ,
+            :ltTBL_R_TXN.card_type :s_ind ,
+            :ltTBL_R_TXN.disc_cycle :s_ind ,
+            :ltTBL_R_TXN.ibox42 :s_ind ,
+            :ltTBL_R_TXN.brno :s_ind ,
+            :ltTBL_R_TXN.scan_mode :s_ind ,
+            :ltTBL_R_TXN.region_code :s_ind ,
+            :ltTBL_R_TXN.license_type :s_ind ,
+            :ltTBL_R_TXN.ch_respcd :s_ind ,
+            :ltTBL_R_TXN.rt_respcd :s_ind ,
+            :ltTBL_R_TXN.cha_nm :s_ind ,
+            :ltTBL_R_TXN.cha_modid :s_ind ,
+            :ltTBL_R_TXN.cha_merno :s_ind ,
+            :ltTBL_R_TXN.chld_merno :s_ind ,
+            :ltTBL_R_TXN.cha_zsnm :s_ind ,
+            :ltTBL_R_TXN.resv1 :s_ind ,
+            :ltTBL_R_TXN.resv2 :s_ind ,
+            :ltTBL_R_TXN.resv3 :s_ind
+        FROM
+            tbl_r_txn
+        WHERE
+            ORDER_NO = :ltTBL_R_TXN.order_no
+        for update;
+
+        memcpy(pTBL_R_TXN, &ltTBL_R_TXN, sizeof(ltTBL_R_TXN));
+        break;
+
+    case DBS_UPDATE1 :
+        EXEC SQL UPDATE
+            tbl_r_txn
+        SET
+            STAT                    = :ltTBL_R_TXN.stat ,
+            CH_RESPCD               = :ltTBL_R_TXN.ch_respcd
+        WHERE
+            ORDER_NO = :ltTBL_R_TXN.order_no;
+
+        break;
+
+    case DBS_INSERT :
+        EXEC SQL INSERT INTO tbl_r_txn (
+            ID ,
+            TX_DATE ,
+            TX_TIME ,
+            STAT ,
+            ORDER_NO ,
+            TX_CODE ,
+            TX_AMT ,
+            CARD_TYPE ,
+            DISC_CYCLE ,
+            IBOX42 ,
+            BRNO ,
+            SCAN_MODE ,
+            REGION_CODE ,
+            LICENSE_TYPE ,
+            CH_RESPCD ,
+            RT_RESPCD ,
+            CHA_NM ,
+            CHA_MODID ,
+            CHA_MERNO ,
+            CHLD_MERNO ,
+            CHA_ZSNM ,
+            RESV1 ,
+            RESV2 ,
+            RESV3
+        ) VALUES (
+            :ltTBL_R_TXN.id ,
+            :ltTBL_R_TXN.tx_date ,
+            :ltTBL_R_TXN.tx_time ,
+            :ltTBL_R_TXN.stat ,
+            :ltTBL_R_TXN.order_no ,
+            :ltTBL_R_TXN.tx_code ,
+            :ltTBL_R_TXN.tx_amt ,
+            :ltTBL_R_TXN.card_type ,
+            :ltTBL_R_TXN.disc_cycle ,
+            :ltTBL_R_TXN.ibox42 ,
+            :ltTBL_R_TXN.brno ,
+            :ltTBL_R_TXN.scan_mode ,
+            :ltTBL_R_TXN.region_code ,
+            :ltTBL_R_TXN.license_type ,
+            :ltTBL_R_TXN.ch_respcd ,
+            :ltTBL_R_TXN.rt_respcd ,
+            :ltTBL_R_TXN.cha_nm ,
+            :ltTBL_R_TXN.cha_modid ,
+            :ltTBL_R_TXN.cha_merno ,
+            :ltTBL_R_TXN.chld_merno ,
+            :ltTBL_R_TXN.cha_zsnm ,
+            :ltTBL_R_TXN.resv1 ,
+            :ltTBL_R_TXN.resv2 ,
+            :ltTBL_R_TXN.resv3
+        );
+        break;
+
+    default :
+        return DB_DBSFUNCERR;
+    }
+
+    return sqlca.sqlcode;
+}
+
+
+int DbsCntTBL_R_TXN(int ifunc, struct TBL_R_TXN_Def *pTBL_R_TXN, char *psCount, int nCntSize)
+{
+    memcpy(&ltTBL_R_TXN, pTBL_R_TXN, sizeof(ltTBL_R_TXN));
+
+    memset(s_count, 0, sizeof(s_count));
+
+    switch (ifunc) {
+    default :
+        return DB_DBSFUNCERR;
+    }
+
+    return sqlca.sqlcode;
+}
+
+
+int DbsStatTBL_R_TXN(int ifunc, struct TBL_R_TXN_Def *pTBL_R_TXN, char *psCount, int nCntSize)
+{
+    memcpy(&ltTBL_R_TXN, pTBL_R_TXN, sizeof(ltTBL_R_TXN));
+
+    memset(s_count, 0, sizeof(s_count));
+
+    switch (ifunc) {
+    case DBS_STAT1 :
+        EXEC SQL SELECT 
+            to_char(nvl(count(1), 0)) ,
+            SUM(TX_AMT) ,
+            TX_DATE ,
+            CHA_NM ,
+            CHA_MODID ,
+            CHA_MERNO
+        INTO
+            :s_count ,
+            :ltTBL_R_TXN.tx_amt :s_ind ,
+            :ltTBL_R_TXN.tx_date :s_ind ,
+            :ltTBL_R_TXN.cha_nm :s_ind ,
+            :ltTBL_R_TXN.cha_modid :s_ind ,
+            :ltTBL_R_TXN.cha_merno :s_ind
+        FROM
+            tbl_r_txn
+        WHERE
+            CHA_MERNO = :ltTBL_R_TXN.cha_merno AND
+            CHA_MODID = :ltTBL_R_TXN.cha_modid AND
+            CHA_NM = :ltTBL_R_TXN.cha_nm AND
+            STAT = :ltTBL_R_TXN.stat AND
+            TX_DATE = :ltTBL_R_TXN.tx_date
+        GROUP BY
+            TX_DATE ,
+            CHA_NM ,
+            CHA_MODID ,
+            CHA_MERNO;
+        if (psCount && nCntSize > 0) strncpy(psCount, s_count, nCntSize - 1);
+        break;
+
+    default :
+        return DB_DBSFUNCERR;
+    }
+
+    return sqlca.sqlcode;
+}

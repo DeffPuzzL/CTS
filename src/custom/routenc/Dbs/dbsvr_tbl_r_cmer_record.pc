@@ -1,0 +1,218 @@
+/*
+ *  Copyright 2006, Shanghai Huateng Software Systems Co., Ltd.
+ *  All right reserved.
+ *
+ *  THIS IS UNPUBLISHED PROPRIETARY SOURCE CODE OF SHANGHAI HUATENG
+ *  SOFTWARE SYSTEMS CO., LTD.  THE CONTENTS OF THIS FILE MAY NOT
+ *  BE DISCLOSED TO THIRD PARTIES, COPIED OR DUPLICATED IN ANY FORM,
+ *  IN WHOLE OR IN PART, WITHOUT THE PRIOR WRITTEN PERMISSION OF
+ *  SHANGHAI HUATENG SOFTWARE SYSTEMS CO., LTD.
+ *
+ *  $Id$
+ *
+ *  function: table tbl_r_cmer_record operator function
+ *
+ *  Edit History:
+ *
+ *    2017/08/15 09:18:27 by gendb
+ */
+ 
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include "dbs/dbsdef.h"
+EXEC SQL include sqlca;
+EXEC SQL include sqlda;
+
+
+EXEC SQL BEGIN DECLARE SECTION;
+struct TBL_R_CMER_RECORD_Def {
+    char       rowid[21];    /*  */
+    char       tx_date[9];    /* 日期 */
+    char       mcht_no[26];    /* 商户号 */
+    char       chld_mcht[21];    /* 子商户号 */
+    char       cha_modid[13];    /* 通道模型ID */
+    char       cha_nm[5];    /* 通道名称 */
+    int        inq_num;    /* 查询笔数 */
+    int        csm_num;    /* 消费笔数 */
+    double     csm_amount;    /* 消费金额 */
+} ltTBL_R_CMER_RECORD;
+short s_ind;
+char  s_count[33];
+EXEC SQL END DECLARE SECTION;
+/*************************************************************************/
+/*    input : DBS_FUNC   the dbs func                                    */
+/*            The struct pointer defined in upper.                       */
+/*    return : the sqlca.sqlcode                                         */
+/*************************************************************************/
+int DbsTBL_R_CMER_RECORD(int ifunc, struct TBL_R_CMER_RECORD_Def *pTBL_R_CMER_RECORD)
+{
+    memcpy(&ltTBL_R_CMER_RECORD, pTBL_R_CMER_RECORD, sizeof(ltTBL_R_CMER_RECORD));
+
+    switch (ifunc) {
+    case DBS_SELECT1 :
+        EXEC SQL SELECT
+            ROWID ,
+            TX_DATE ,
+            MCHT_NO ,
+            CHLD_MCHT ,
+            CHA_MODID ,
+            CHA_NM ,
+            INQ_NUM ,
+            CSM_NUM ,
+            CSM_AMOUNT
+        INTO
+            :ltTBL_R_CMER_RECORD.rowid :s_ind ,
+            :ltTBL_R_CMER_RECORD.tx_date :s_ind ,
+            :ltTBL_R_CMER_RECORD.mcht_no :s_ind ,
+            :ltTBL_R_CMER_RECORD.chld_mcht :s_ind ,
+            :ltTBL_R_CMER_RECORD.cha_modid :s_ind ,
+            :ltTBL_R_CMER_RECORD.cha_nm :s_ind ,
+            :ltTBL_R_CMER_RECORD.inq_num :s_ind ,
+            :ltTBL_R_CMER_RECORD.csm_num :s_ind ,
+            :ltTBL_R_CMER_RECORD.csm_amount :s_ind
+        FROM
+            tbl_r_cmer_record
+        WHERE
+            TX_DATE = :ltTBL_R_CMER_RECORD.tx_date AND
+            MCHT_NO = :ltTBL_R_CMER_RECORD.mcht_no AND
+            CHA_MODID = :ltTBL_R_CMER_RECORD.cha_modid AND
+            CHA_NM = :ltTBL_R_CMER_RECORD.cha_nm;
+
+        memcpy(pTBL_R_CMER_RECORD, &ltTBL_R_CMER_RECORD, sizeof(ltTBL_R_CMER_RECORD));
+        break;
+
+    case DBS_LOCK1 :
+        EXEC SQL SELECT
+            ROWID ,
+            TX_DATE ,
+            MCHT_NO ,
+            CHLD_MCHT ,
+            CHA_MODID ,
+            CHA_NM ,
+            INQ_NUM ,
+            CSM_NUM ,
+            CSM_AMOUNT
+        INTO
+            :ltTBL_R_CMER_RECORD.rowid :s_ind ,
+            :ltTBL_R_CMER_RECORD.tx_date :s_ind ,
+            :ltTBL_R_CMER_RECORD.mcht_no :s_ind ,
+            :ltTBL_R_CMER_RECORD.chld_mcht :s_ind ,
+            :ltTBL_R_CMER_RECORD.cha_modid :s_ind ,
+            :ltTBL_R_CMER_RECORD.cha_nm :s_ind ,
+            :ltTBL_R_CMER_RECORD.inq_num :s_ind ,
+            :ltTBL_R_CMER_RECORD.csm_num :s_ind ,
+            :ltTBL_R_CMER_RECORD.csm_amount :s_ind
+        FROM
+            tbl_r_cmer_record
+        WHERE
+            TX_DATE = :ltTBL_R_CMER_RECORD.tx_date AND
+            MCHT_NO = :ltTBL_R_CMER_RECORD.mcht_no AND
+            CHA_MODID = :ltTBL_R_CMER_RECORD.cha_modid AND
+            CHA_NM = :ltTBL_R_CMER_RECORD.cha_nm
+        for update;
+
+        memcpy(pTBL_R_CMER_RECORD, &ltTBL_R_CMER_RECORD, sizeof(ltTBL_R_CMER_RECORD));
+        break;
+
+    case DBS_UPDATE1 :
+        EXEC SQL UPDATE
+            tbl_r_cmer_record
+        SET
+            TX_DATE                 = :ltTBL_R_CMER_RECORD.tx_date ,
+            MCHT_NO                 = :ltTBL_R_CMER_RECORD.mcht_no ,
+            CHA_MODID               = :ltTBL_R_CMER_RECORD.cha_modid ,
+            CHA_NM                  = :ltTBL_R_CMER_RECORD.cha_nm ,
+            INQ_NUM                 = :ltTBL_R_CMER_RECORD.inq_num ,
+            CSM_NUM                 = :ltTBL_R_CMER_RECORD.csm_num ,
+            CSM_AMOUNT              = :ltTBL_R_CMER_RECORD.csm_amount
+        WHERE
+            ROWID = :ltTBL_R_CMER_RECORD.rowid;
+
+        break;
+
+    case DBS_INSERT :
+        EXEC SQL INSERT INTO tbl_r_cmer_record (
+            TX_DATE ,
+            MCHT_NO ,
+            CHLD_MCHT ,
+            CHA_MODID ,
+            CHA_NM ,
+            INQ_NUM ,
+            CSM_NUM ,
+            CSM_AMOUNT
+        ) VALUES (
+            :ltTBL_R_CMER_RECORD.tx_date ,
+            :ltTBL_R_CMER_RECORD.mcht_no ,
+            :ltTBL_R_CMER_RECORD.chld_mcht ,
+            :ltTBL_R_CMER_RECORD.cha_modid ,
+            :ltTBL_R_CMER_RECORD.cha_nm ,
+            :ltTBL_R_CMER_RECORD.inq_num ,
+            :ltTBL_R_CMER_RECORD.csm_num ,
+            :ltTBL_R_CMER_RECORD.csm_amount
+        );
+        break;
+
+    default :
+        return DB_DBSFUNCERR;
+    }
+
+    return sqlca.sqlcode;
+}
+
+
+int DbsCntTBL_R_CMER_RECORD(int ifunc, struct TBL_R_CMER_RECORD_Def *pTBL_R_CMER_RECORD, char *psCount, int nCntSize)
+{
+    memcpy(&ltTBL_R_CMER_RECORD, pTBL_R_CMER_RECORD, sizeof(ltTBL_R_CMER_RECORD));
+
+    memset(s_count, 0, sizeof(s_count));
+
+    switch (ifunc) {
+    default :
+        return DB_DBSFUNCERR;
+    }
+
+    return sqlca.sqlcode;
+}
+
+
+int DbsStatTBL_R_CMER_RECORD(int ifunc, struct TBL_R_CMER_RECORD_Def *pTBL_R_CMER_RECORD, char *psCount, int nCntSize)
+{
+    memcpy(&ltTBL_R_CMER_RECORD, pTBL_R_CMER_RECORD, sizeof(ltTBL_R_CMER_RECORD));
+
+    memset(s_count, 0, sizeof(s_count));
+
+    switch (ifunc) {
+    case DBS_STAT1 :
+        EXEC SQL SELECT 
+            TX_DATE ,
+            MCHT_NO ,
+            CHA_NM ,
+            SUM(INQ_NUM) ,
+            SUM(CSM_NUM) ,
+            SUM(CSM_AMOUNT)
+        INTO
+            :ltTBL_R_CMER_RECORD.tx_date :s_ind ,
+            :ltTBL_R_CMER_RECORD.mcht_no :s_ind ,
+            :ltTBL_R_CMER_RECORD.cha_nm :s_ind ,
+            :ltTBL_R_CMER_RECORD.inq_num :s_ind ,
+            :ltTBL_R_CMER_RECORD.csm_num :s_ind ,
+            :ltTBL_R_CMER_RECORD.csm_amount :s_ind
+        FROM
+            tbl_r_cmer_record
+        WHERE
+            TX_DATE = :ltTBL_R_CMER_RECORD.tx_date AND
+            MCHT_NO = :ltTBL_R_CMER_RECORD.mcht_no
+        GROUP BY
+            TX_DATE ,
+            MCHT_NO ,
+            CHA_NM;
+        if (psCount && nCntSize > 0) strncpy(psCount, s_count, nCntSize - 1);
+        break;
+
+    default :
+        return DB_DBSFUNCERR;
+    }
+
+    return sqlca.sqlcode;
+}

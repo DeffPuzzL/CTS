@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="GBK"?>
+<cts>
+  <globle>
+    <sysname>cts</sysname>
+    <txdate>20161122</txdate>
+    <cleardate>20161122</cleardate>
+    <seqno>1</seqno>
+    <state>1</state>
+    <trcount>0</trcount>
+    <succcount>0</succcount>
+    <failcount>0</failcount>
+    <insulatenum>8</insulatenum>
+    <insulatetime>60</insulatetime>
+    <poolsize>32768</poolsize>
+    <poolnum>2000</poolnum>
+    <scantime>30</scantime>
+    <queuetime>25</queuetime>
+    <trctime>30</trctime>
+    <maxservers>100</maxservers>
+    <maxprocess>500</maxprocess>
+    <maxasyn>1500</maxasyn>
+    <qpratio>3</qpratio>
+    <loglevel>4</loglevel>
+  </globle>
+</cts>

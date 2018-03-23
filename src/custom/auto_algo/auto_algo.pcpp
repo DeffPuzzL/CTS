@@ -1,0 +1,206 @@
+/**************************************************************************************************
+    文 件 名：auto_algo.pcpp
+    代码作者：DeffPuzzL
+    编写版本：
+    创建日期：2016-07-14
+    功能描述：代付流水自动查询
+ **************************************************************************************************/
+#include    "auto_algo.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+EXEC SQL BEGIN DECLARE SECTION;
+#include    "tbl_order_err.h"
+EXEC SQL END DECLARE SECTION;
+
+/**************************************************************************************************
+    方法定义
+ **************************************************************************************************/
+CAutoAlgo::stEvent CAutoAlgo::m_stEvent[] =
+{
+    { "", NULL }
+};
+
+/**************************************************************************************************
+    函 数 名：CAutoAlgo()
+    功能描述：构造函数
+    返回说明：
+ **************************************************************************************************/
+CAutoAlgo::CAutoAlgo()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：~CAutoAlgo()
+    功能描述：析构函数
+    返回说明：
+ **************************************************************************************************/
+CAutoAlgo::~CAutoAlgo()
+{
+
+
+}
+
+/**************************************************************************************************
+    函 数 名：lRunObject(char* in_szClass, char* in_szAction)
+    功能描述：运行类中的方法
+    返回说明：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ **************************************************************************************************/
+long    CAutoAlgo::lRunObject(char *in_szClass, char *in_szAction)
+{
+    int     i = 0;
+    char    *p, szAction[256];
+
+    memset(szAction, 0, sizeof(szAction));
+
+    if ((p = strstr(in_szAction, "__")) != NULL)
+    {
+        strncpy(szAction, in_szAction, p - in_szAction);
+    }
+    else
+    {
+        strcpy(szAction, in_szAction);
+    }
+
+    while (0 != strcmp(m_stEvent[i].m_szName, ""))
+    {
+        if (0 == strcmp(m_stEvent[i].m_szName, szAction))
+        {
+            (this->*m_stEvent[i].m_pEvent)();
+            return RC_SUCC;
+        }
+
+        i++;
+    }
+
+    SYSError(RET_SYSTEM, "组件(%s)的事件(%s)没注册", in_szClass, in_szAction);
+    return RC_FAIL;
+}
+
+/**************************************************************************************************
+    函 数 名：vPutErrPool(TOrderErr *pstErr)
+    功能描述：检查记录重新清分
+    返回说明：
+        RC_SUCC      --成功
+        RC_FAIL      --失败
+**************************************************************************************************/
+void    CAutoAlgo::vPutErrorPool(TOrderErr *pstErr)
+{
+    IBPputstring("id", pstErr->id);
+    IBPputstring("tx_date", pstErr->tx_date);
+    IBPputstring("tx_time", pstErr->tx_time);
+    IBPputstring("channel_no", pstErr->channel_no);
+    IBPputstring("pay_type", pstErr->pay_type);
+    IBPputstring("seq_order", pstErr->seq_order);
+    IBPputdouble("tx_amt", pstErr->tx_amt);
+    IBPputlong("card_type", pstErr->card_type);
+    IBPputlong("disc_cycle", pstErr->disc_cycle);
+    IBPputstring("app_code", pstErr->app_code);
+    IBPputstring("mert_no", pstErr->mert_no);
+    IBPputstring("mert_nm", pstErr->mert_nm);
+    IBPputstring("brh_code", pstErr->brh_code);
+    IBPputstring("product_code", pstErr->product_code);
+    IBPputstring("order_id", pstErr->order_id);
+    IBPputstring("bank_code", pstErr->bank_code);
+    IBPputstring("bank_card_no", pstErr->bank_card_no);
+    IBPputstring("user_name", pstErr->user_name);
+    IBPputstring("bank_acc_type", pstErr->bank_acc_type);
+    IBPputstring("bank_full_name", pstErr->bank_full_name);
+    IBPputstring("bank_branch_name", pstErr->bank_branch_name);
+    IBPputstring("bank_areacode", pstErr->bank_areacode);
+    IBPputstring("cnaps_no", pstErr->cnaps_no);
+    IBPputstring("cnaps_bankno", pstErr->cnaps_bankno);
+    IBPputstring("currency", pstErr->currency);
+    IBPputstring("cert_type", pstErr->cert_type);
+    IBPputstring("cert_no", pstErr->cert_no);
+    IBPputstring("mobile_no", pstErr->mobile_no);
+    IBPputstring("product_name", pstErr->product_name);
+    IBPputstring("pay_kind", pstErr->pay_kind);
+	IBPputstring("stlm_date", pstErr->stlm_date);
+}
+
+/************************************************************************************
+	函数定义 ：vAutoCheckErr(SATvm *pstSavm, CtsProcess *pstProcess)
+	函数说明 ：遍历监控流水表记录
+    返回说明 ：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ ************************************************************************************/
+void    CAutoAlgo::vAutoCheckErr(SATvm *pstSavm, CtsProcess *pstProcess)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+	TOrderErr   stErr;
+	char        szUnus[2], szFlag[2];
+    EXEC SQL END DECLARE SECTION;
+
+    memset(szUnus, 0, sizeof(szUnus));
+    memset(szFlag, 0, sizeof(szFlag));
+	memset(&stErr, 0, sizeof(TOrderErr));
+    szFlag[0] = STLM_CUP_TO_DONE;
+    szUnus[0] = ERR_CUP_MCHT_UNUSUAL;
+	stErr.err_type[0] = ERR_CUP_MCHT_UNNORMAL;
+	stErr.stlm_type[0] = STLM_ENT_FLG_OK;	
+	stErr.result_flag[0] = STLM_CUP_NOT_DEAL;	
+
+    EXEC SQL DECLARE Cur_stlm_err CURSOR FOR SELECT * FROM TBL_ORDER_ERR
+    WHERE ((RESULT_FLAG = :stErr.result_flag AND ERR_TYPE IN (:stErr.err_type, :szUnus) 
+		AND (STLM_TYPE IS NULL OR STLM_TYPE = :stErr.stlm_type)) OR RESULT_FLAG = :szFlag) 
+	ORDER BY TX_DATE, TX_TIME;
+
+    EXEC SQL OPEN Cur_stlm_err;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "打开游标失败, err:(%d)(%s)", SQLCODE, sDbsError());
+        return ;
+    }
+
+    while(1)
+    {
+		memset(&stErr, 0, sizeof(TOrderErr));
+        EXEC SQL FETCH Cur_stlm_err INTO :stErr;
+        if(SQLCODE == DBS_NOTFOUND)
+            break;
+        else if(SQLCODE)
+        {
+            SYSError(RET_DATABASE, "获取差错明细出错, %s", sDbsError());
+            break;
+        }
+
+        lMonitorEvent(pstSavm, pstProcess);
+        strncpy(stErr.next_date, sGetDate(), sizeof(stErr.next_date));
+        IBPrace("监控到流水(%s)，在本周期(%s)参与清分", stErr.id, stErr.next_date);
+		vPutErrorPool(&stErr);
+        if(RC_FAIL == lStartTrade(pstSavm, pGetCmie(), "200020"))
+        {
+            SYSError(RET_SYSTEM, "调用新交易(200020)失败, err:%s", sGetError());
+            continue;
+        }
+
+		if(IBPIserr())    continue;
+
+        stErr.result_flag[0] = STLM_CUP_SETTLE_SUCC;
+        EXEC SQL UPDATE TBL_ORDER_ERR SET
+        	RESULT_FLAG = :stErr.result_flag,
+        	NEXT_DATE   = :stErr.next_date,
+        	UPDATE_TIME = :stErr.update_time
+        WHERE ID = :stErr.id;
+        if(SQL_UD_ERR)
+        {
+            SYSError(RET_DATABASE, "更新流水(%s)失败, err:(%d)(%s)", stErr.id, SQLCODE, 
+				sDbsError());
+			continue;
+        }
+    }
+
+    EXEC SQL COMMIT WORK;
+    EXEC SQL CLOSE Cur_stlm_err;
+
+    return ;
+}
+
+/*************************************************************************************************
+    code end
+**************************************************************************************************/

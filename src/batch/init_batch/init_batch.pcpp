@@ -1,0 +1,706 @@
+/**************************************************************************************************
+    文 件 名：clear_day.pcpp
+    代码作者：DeffPuzzL
+    编写版本：
+    创建日期：2016-07-14
+    功能描述：demo实现业务模块
+ **************************************************************************************************/
+#include    "init_batch.h"
+#define     SQLCA_STORAGE_CLASS     extern
+#include    "sqlca.h"
+
+EXEC SQL BEGIN DECLARE SECTION;
+#include "tbl_order_succ.h"
+#include "tbl_bat_main_list.h"
+EXEC SQL END DECLARE SECTION;
+
+CMList          *g_pstCRoot;
+Benum           g_eExit = RC_SUCC;
+
+/**************************************************************************************************
+    初始化内存定义
+ **************************************************************************************************/
+#define     MCHT_CACHE_INIT                 '0'
+#define     MCHT_CACHE_RUNN                 '1'
+#define     MCHT_CACHE_SUCC                 '2'
+#define     MCHT_CACHE_FAIL                 '3'
+
+#define     BATCH_TASK_INIT                 '0'
+#define     BATCH_TASK_RUN                  '1'
+#define     BATCH_TASK_SUCC                 '2'
+#define     BATCH_TASK_FAIL                 '3'
+#define     BATCH_TASK_PART                 '4'
+
+#define     BATCH_CALL_NO                   '0' // 自动大任务模式 
+#define     BATCH_CALL_AUTO                 '1' // 支持成功后重做 
+#define     BATCH_CALL_SUB                  '2' // 支持手动发起子任务模式 
+#define     BATCH_CALL_PAT                  '3' // 支持手动发起单子任务模式
+#define     BATCH_CALL_TASK                 '4' // 仅仅支持子任务模式发起
+
+#define     BATCH_WORK_OFF                  '3' // 非工作日
+#define     BATCH_WORK_DAY                  '2' // 工作日
+#define     BATCH_WORK_BRH                  '1' // 分润日
+
+#define     TASK_REDO_YES                   '1' // 可以重做
+#define     TASK_REDO_NO                    '0' // 不可能重做
+
+/**************************************************************************************************
+    方法定义
+ **************************************************************************************************/
+CBatch::stEvent CBatch::m_stEvent[] =
+{
+    {"cache",                      &CBatch::vCreateTvmTable },
+    {"list",                       &CBatch::vGetBatList },
+    {"init",                       &CBatch::vInitBatTask },
+    {"running",                    &CBatch::vSetBatRun },
+    {"finish",                     &CBatch::vSetBatFinish },
+    {"", NULL }
+};
+
+/**************************************************************************************************
+    函 数 名：CBatch()
+    功能描述：构造函数
+    返回说明：
+ **************************************************************************************************/
+CBatch::CBatch()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：~CBatch()
+    功能描述：析构函数
+    返回说明：
+ **************************************************************************************************/
+CBatch::~CBatch()
+{
+
+}
+
+/**************************************************************************************************
+    函 数 名：lRunObject(char* in_szClass, char* in_szAction)
+    功能描述：运行类中的方法
+    返回说明：
+        RC_SUCC         --成功
+        RC_FAIL         --失败
+ **************************************************************************************************/
+long    CBatch::lRunObject(char* in_szClass, char* in_szAction)
+{
+    int     i = 0;
+    char    *p, szAction[256];
+
+    memset(szAction, 0, sizeof(szAction));
+    if((p = strstr(in_szAction, "__")) != NULL)
+        strncpy(szAction, in_szAction, p - in_szAction);
+    else
+        strcpy(szAction, in_szAction);
+
+    while(0 != strcmp(m_stEvent[i].m_szName, ""))
+    {
+        if(0 == strcmp(m_stEvent[i].m_szName, szAction))
+        {
+            (this->*m_stEvent[i].m_pEvent)();
+            return RC_SUCC;
+        }
+        i++;
+    }
+
+    SYSError(RET_SYSTEM, "组件(%s)的事件(%s)没注册", in_szClass, in_szAction);
+    return RC_FAIL;
+}
+
+/**************************************************************************************************
+    函 数 名：lSaveProcess(CMList **ppstRoot, long lPid)
+    功能描述：
+    返回说明：
+ **************************************************************************************************/
+long    lSaveProcess(CMList **ppstRoot, long lPid)
+{
+    CMList  *pstList = *ppstRoot;
+    
+    pstList = pInsertList(pstList, (void *)&lPid, sizeof(long));
+    if(!pstList)
+    {
+        vDestroyList(pstList);
+        return RC_FAIL;
+    }
+    
+    *ppstRoot = pstList;
+    
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：vReCycleChild(int sig)
+    功能描述：交易流水回收
+    返回说明：
+        无
+ **************************************************************************************************/
+static  void    vReCycleChild(int sig)
+{
+    long    lStatus = 0;
+    pid_t   lPr = 0;
+
+    //处理僵尸进程
+    while((lPr = waitpid(-1, (int *)&lStatus, WNOHANG | WUNTRACED)) > 0)
+    {
+        g_pstCRoot = pDeleteNode(g_pstCRoot, (void *)&lPr, sizeof(lPr));
+        /* 检查子进程退出状态 */
+        if(WIFEXITED(lStatus))
+        {
+            if(RC_SUCC != WEXITSTATUS(lStatus)) //  判断退出返回值
+                g_eExit = RC_FAIL;
+        }
+    }
+
+    sigset(SIGCLD,  vReCycleChild);
+    signal(SIGCHLD, vReCycleChild);
+}
+
+/**************************************************************************************************
+    函 数 名：lSetInitStatus(char *pszDate, char chStatus)
+    功能描述：设置内存商户初始化成功
+    返回说明：
+        RC_SUCC                --处理成功
+        RC_FAIL                --处理失败
+ **************************************************************************************************/
+long    CBatch::lSetInitStatus(char *pszDate, char chStatus)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char    szFlag[2], szDate[9];
+    EXEC SQL END DECLARE SECTION;
+
+    memset(szFlag, 0, sizeof(szFlag));
+    memset(szDate, 0, sizeof(szDate));
+
+    szFlag[0] = chStatus;
+    strncpy(szDate, pszDate, sizeof(szDate));
+    EXEC SQL UPDATE TBL_STLM_DATE SET RESV2 = :szFlag WHERE TRANS_DATE = :szDate;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "设置缓存初始化状态失败, (%d)(%s)", SQLCODE, sDbsError());
+        return RC_FAIL;
+    }
+
+    EXEC SQL COMMIT WORK;
+
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：lIsNMchtInit(char *pszDate)
+    功能描述：判断内存商户是否加载完毕
+    返回说明：
+        RC_SUCC                --处理成功
+        RC_FAIL                --处理失败
+ **************************************************************************************************/
+long    CBatch::lIsNMchtInit(char *pszDate)
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    char    szFlag[2], szDate[9];
+    EXEC SQL END DECLARE SECTION;
+
+    memset(szFlag, 0, sizeof(szFlag));
+    memset(szDate, 0, sizeof(szDate));
+
+    strncpy(szDate, pszDate, sizeof(szDate));
+    EXEC SQL SELECT NVL(RESV2, ' ') INTO :szFlag FROM TBL_STLM_DATE 
+        WHERE TRANS_DATE = :szDate FOR UPDATE;
+    if(SQLCODE)
+    {   
+        SYSError(RET_DATABASE, "获取商户初始化配置失败, (%d)(%s)", SQLCODE, sDbsError());
+        return RC_FAIL;
+    }
+    
+    if(MCHT_CACHE_RUNN == szFlag[0])
+    {
+        SYSError(RET_DATABASE, "内存商户正在初始化, 请稍后!");
+        EXEC SQL COMMIT WORK;
+        return RC_FAIL;
+    }
+    else if(MCHT_CACHE_SUCC == szFlag[0])
+    {
+        IBPrace("内存商户表已初始化完成, 继续处理");
+        EXEC SQL COMMIT WORK;
+        return RC_RESET;
+    }
+
+    //    MCHT_CACHE_INIT    ,    MCHT_CACHE_FAIL
+
+    //    如果没加载，将在本进程来执行加载
+    szFlag[0] = MCHT_CACHE_RUNN;
+
+    EXEC SQL UPDATE TBL_STLM_DATE SET RESV2 = :szFlag WHERE TRANS_DATE = :szDate;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "设置内存商户正在初始化状态失败");
+        return RC_FAIL;
+    }
+
+    EXEC SQL COMMIT WORK;
+
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：lUnloadMchtNo()
+    功能描述：导出
+    返回说明：
+        RC_SUCC                --处理成功
+        RC_FAIL                --处理失败
+ **************************************************************************************************/
+long    CBatch::lUnloadMchtNo(char *pszDate, char *pszSettle)
+{
+    char    szFile[512];
+    FILE    *fp = NULL;
+    long    lCount = 0, lRet = 0;
+    EXEC SQL BEGIN DECLARE SECTION;
+    char    szDate[9], szMchtNo[30];
+    EXEC SQL END DECLARE SECTION;
+
+    memset(szFile, 0, sizeof(szFile));
+    memset(szDate, 0, sizeof(szDate));
+    memset(szMchtNo, 0, sizeof(szMchtNo));
+
+    strncpy(szDate, pszDate, sizeof(szDate));
+    lRet = lIsNMchtInit(pszDate);
+    if(RC_FAIL == lRet)
+        return RC_FAIL;
+    else if(RC_RESET == lRet)    
+        return RC_SUCC;
+    else    //    RC_SUCC    在本进程中初始化
+        ;
+
+    snprintf(szFile, sizeof(szFile), "%s/MCHT_%s_%s.txt", getenv("POOL_FILE_PATH"), 
+        pszDate, pszSettle);
+    if(NULL == (fp = fopen(szFile, "w")))
+    {
+        SYSError(RET_SYSTEM, "打开文件(%s)失败, err:(%s)", szFile, strerror(errno));
+        goto ErrHandle;
+    }
+
+    EXEC SQL DECLARE cur_mcht_settle_dtl CURSOR FOR 
+        SELECT IBOX42 FROM TBL_MCHT_SETTLE_DTL 
+    WHERE SETTLE_DATE > TO_CHAR(ADD_MONTHS(TO_DATE(:szDate, 'YYYYMMDD'), - 1), 'YYYYMMDD') 
+        GROUP BY IBOX42;
+
+    EXEC SQL OPEN cur_mcht_settle_dtl;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "插入内存商户信息失败, (%d)(%s)", SQLCODE, sDbsError());
+        goto ErrHandle;
+    }
+
+    while(1)
+    {
+        memset(szMchtNo, 0, sizeof(szMchtNo));
+        EXEC SQL FETCH cur_mcht_settle_dtl INTO :szMchtNo;
+        if(SQLCODE == DBS_NOTFOUND)
+            break;
+        else if(SQLCODE)
+        {
+            SYSError(RET_DATABASE, "导出批次(%s)所需的业管数据失败, err:(%d)(%s)", 
+                pszSettle, SQLCODE, sDbsError());
+            EXEC SQL CLOSE cur_mcht_settle_dtl;
+            goto ErrHandle;
+        }
+
+        sTrimAll(szMchtNo);
+        ++ lCount;
+
+        fprintf(fp, "%s\n", szMchtNo);
+    }
+    EXEC SQL CLOSE cur_mcht_settle_dtl;
+    fclose(fp);
+
+    if(RC_SUCC != lSetInitStatus(pszDate, MCHT_CACHE_SUCC))
+        return RC_FAIL;
+
+    return RC_SUCC;
+
+ErrHandle:
+    if(fp)    fclose(fp);
+    lSetInitStatus(pszDate, MCHT_CACHE_FAIL);
+    return RC_FAIL;
+}
+
+/**************************************************************************************************
+    函 数 名：lCheckResource(SATvm *pstSavm)
+    功能描述：清理平台日切之前的资源
+    返回说明：
+        RC_SUCC                --处理成功
+        RC_FAIL                --处理失败
+ **************************************************************************************************/
+long    CBatch::lCheckResource(SATvm *pstSavm)
+{
+    long    i, lCount = 0;
+    GCts    *pstCts = (GCts *)pGetGloble();
+
+    for(i = 0; i < 200 && 1 != lCount; i ++, usleep(50000))
+    {
+        if(RC_FAIL == (lCount = lCountTrade()))
+    {
+            IBPerror("统计平台交易失败, %s", sGetTError(pstSavm->m_lErrno));
+            return RC_FAIL;
+    }
+    }
+
+    if(1 != lCount)
+    {
+        IBPerror("平台还有未处理完的交易(%d)", lCount);
+        return RC_FAIL;
+    }
+
+    if(RC_SUCC != lRecycleAsyn(pstSavm, pstCts->m_szCrDate))
+    {
+        IBPerror("回收(%s)异步标识失败, %s", pstCts->m_szCrDate, sGetTError(pstSavm->m_lErrno));
+        return RC_FAIL;
+    }
+
+    return RC_SUCC;
+}
+
+/**************************************************************************************************
+    函 数 名：vCreateTvmTable()
+    功能描述：生成渠道信息
+    返回说明：
+        RC_SUCC      --成功
+        RC_FAIL      --失败
+ **************************************************************************************************/
+void    CBatch::vCreateTvmTable()
+{
+    size_t      i, lPid;
+    CtsParam    stParam;
+    SATvm       *pstSavm = (SATvm *)pGetSATvm();
+
+    memset(&stParam, 0, sizeof(stParam));
+    strcpy(stParam.m_szTxDate, sGetDate());
+    strcpy(stParam.m_szCrDate, stParam.m_szTxDate);
+    stParam.m_lSeqNo = atol(sGetDbsEnv("START_SEQNO"));
+    stParam.m_lSeqNo = stParam.m_lSeqNo > 1 ? stParam.m_lSeqNo : 1;    
+    if(RC_SUCC != lDayendParam(pstSavm, &stParam))
+    {
+        SYSError(RET_SYSTEM, "更新系统参数失败, %s", sGetTError(pstSavm->m_lErrno));
+        return ;
+    }
+
+    IBPputstring("day_txdate", stParam.m_szTxDate);
+    IBPputstring("day_cleardate", stParam.m_szCrDate);
+    IBPputstring("day_settle", (char *)"T088");
+
+    IBPrace("同步系统运行信息成功, 日期(%s)清算日期(%s)流水号(%d)", stParam.m_szTxDate,
+        stParam.m_szCrDate, stParam.m_lSeqNo);
+
+    vDbsDisconnect();
+    sigset(SIGCLD,  vReCycleChild);
+    signal(SIGCHLD, vReCycleChild);
+    for(i = 0, g_pstCRoot = NULL; i < lGetCreateNum(); i ++) 
+    {
+        lPid = fork();
+        if(lPid < 0)
+        {
+            SYSError(RET_SYSTEM, "fork子进程失败, err:(%d)(%s)", errno, strerror(errno));
+            break;
+        }
+        else if(lPid > 0)
+        {
+            if(RC_SUCC != lSaveProcess(&g_pstCRoot, lPid))
+                return ;
+            continue;
+        }
+
+        if(RC_SUCC != lDbsConnect(pGetTblCreate(i)->lDbsFrom))
+        {
+            SYSError(RET_DATABASE, "连接数据库失败, %s", sGetError());
+            exit(RC_FAIL);
+        }
+
+	    if(RC_SUCC != pGetTblCreate(i)->pfCreate(pstSavm, NULL))
+        {
+            vDbsDisconnect();
+            SYSError(RET_SYSTEM, "初始化表(0X%X)失败, %s", pGetTblCreate(i)->table, sGetError());
+            exit(RC_FAIL);
+        }
+
+        IBPrace("进程(%d)初始化表(0X%X): %s", getpid(), pGetTblCreate(i)->table, sGetError());
+        vDbsDisconnect();
+        exit(RC_SUCC);      //  子进程全部退出
+    }
+
+    if(RC_SUCC != lDbsConnect(DBS_BATCH)) 
+    {   
+        SYSError(RET_DATABASE, "连接数据库失败, %s", sDbsError());
+        return ;
+    } 
+
+    while(g_pstCRoot)
+        usleep(10);
+
+    if(RC_SUCC != lResetSAinit())
+    {
+        SYSError(RET_SYSTEM, "刷新二级缓存失败");
+        return ;
+    }
+
+    signal(SIGCHLD, SIG_IGN);
+    if(IBPIserr())
+    {
+        SYSError(RET_SYSTEM, "初始化平台内存业务表失败");
+        return ;
+    }
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vGetBatList()
+    功能描述：设置批次状态
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CBatch::vGetBatList()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TBatMainList stMain;
+    long	 lIdx = 0;
+    EXEC SQL END DECLARE SECTION;
+
+    memset(&stMain, 0, sizeof(TBatMainList));
+    IBPgetstring("BAT_NUM", stMain.settle_num, "批次编号");
+    IBPgetstring("BAT_DATE", stMain.task_date, "清算日期");
+    IBPgetstring("BAT_CUPSNO", stMain.channel_no, "通道编号");
+    if(IBPIserr())
+        return ;
+
+    EXEC SQL DECLARE Cur_bat_list CURSOR FOR
+        SELECT * FROM TBL_BAT_MAIN_LIST T
+    WHERE TASK_DATE = :stMain.task_date AND SETTLE_NUM = :stMain.settle_num
+        AND CHANNEL_NO = :stMain.channel_no ORDER BY BAT_CLS;
+
+    EXEC SQL OPEN Cur_bat_list;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "获取任务列表失败, %s", sDbsError());
+        return ;
+    }
+
+    while(1)
+    {
+        memset(&stMain, 0, sizeof(TBatMainList));
+        EXEC SQL FETCH Cur_bat_list INTO :stMain;
+        if(SQLERR)
+        {
+            SYSError(RET_DATABASE, "获取任务列表失败, %s", sDbsError());
+            EXEC SQL CLOSE Cur_bat_list;
+            return ;
+        }
+        else if(SQLNOTFOUND)
+            break;
+
+        sTrimAll(stMain.id);
+        sTrimAll(stMain.bat_next);
+        IBPputlongidx(lIdx, "BAT_CLS", stMain.bat_cls);
+        IBPputlongidx(lIdx, "BAT_COST", stMain.bat_cost);
+        IBPputstringidx(lIdx, "BAT_CODE", stMain.bat_code);
+        IBPputstringidx(lIdx, "BAT_DATE", stMain.task_date);
+        IBPputstringidx(lIdx, "BAT_NUM", stMain.settle_num);
+        IBPputstringidx(lIdx, "BAT_CUPSNO", stMain.channel_no);
+        IBPputstringidx(lIdx, "BAT_STATE", stMain.bat_state);
+        IBPputstringidx(lIdx, "BAT_MSG", stMain.bat_msg);
+        IBPputstringidx(lIdx, "BAT_DSP", stMain.bat_dsp);
+        IBPputstringidx(lIdx, "BAT_NEXT", stMain.bat_next);
+        IBPputstringidx(lIdx, "BAT_REDO", stMain.task_redo);
+	lIdx ++;
+    }
+    EXEC SQL CLOSE Cur_bat_list;
+    IBPputlong("COUNT", lIdx);
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vInitBatTask()
+    功能描述：生成当日批次信息
+    返回说明：
+        RC_SUCC      --成功
+        RC_FAIL      --失败
+ **************************************************************************************************/
+void    CBatch::vInitBatTask()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TBatMainList stMain;
+    EXEC SQL END DECLARE SECTION;
+    GCts    *pstCts = (GCts *)pGetGloble();
+
+    memset(&stMain, 0, sizeof(TBatMainList));
+    IBPgetstring("BAT_NUM", stMain.settle_num, "批次编号");
+    IBPgetstring("BAT_DATE", stMain.task_date, "清算日期");
+    IBPgetstring("BAT_CUPSNO", stMain.channel_no, "通道编号");
+    if(IBPIserr())
+        return ;
+
+    if(memcmp(stMain.task_date, sGetDate(), 8) > 0)
+    {
+        SYSError(RET_DATABASE, "批次初始化出错，初始化日期(%s)>(%s)系统日期",
+            stMain.task_date, sGetDate());
+        return ;
+    }
+
+    EXEC SQL SELECT NVL(BATCH_FLAG, 2) INTO :stMain.task_assign FROM TBL_STLM_DATE
+        WHERE TRANS_DATE = :stMain.task_date;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "获取任务日期(%s)模式失败, err:(%d)(%s)", stMain.task_date,
+            SQLCODE, sDbsError());
+        return ;
+    }
+
+    EXEC SQL INSERT INTO TBL_BAT_MAIN_LIST SELECT
+        M.bat_code || :stMain.task_date || :stMain.settle_num || :stMain.channel_no, 
+        M.bat_code, :stMain.task_date, :stMain.settle_num, :stMain.channel_no, 
+        M.BAT_CLS, '0', '', '', M.BAT_DSP, M.BAT_NEXT, M.TASK_SPLIT, '0', M.TASK_REDO, 
+        0, M.TASK_UPD, M.CREATE_TIME, ''
+    FROM TBL_BAT_MAIN M
+    WHERE SETTLE_NUM = :stMain.settle_num AND M.TASK_WORK >= :stMain.task_assign;
+    if(SQLOK)   return ;
+
+    if(-1 == SQLCODE)
+    {
+        SYSError(RET_DATABASE, "本周期(%s)(%s)(%s)任务已存在, 不能重复初始化", stMain.task_date,
+            stMain.settle_num, stMain.channel_no);
+        return ;
+    }
+
+    SYSError(RET_DATABASE, "新增本周期(%s)(%s)(%s)任务失败, err:(%d)(%s)", stMain.task_date,
+       stMain.settle_num, stMain.channel_no, SQLCODE, sDbsError());
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vSetBatRun()
+    功能描述：设置批次运行中
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CBatch::vSetBatRun()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TBatMainList stMain;
+    EXEC SQL END DECLARE SECTION;
+    GCts    *pstCts = (GCts *)pGetGloble();
+
+    memset(&stMain, 0, sizeof(TBatMainList));
+    IBPgetstring("BAT_NUM", stMain.settle_num, "批次编号");
+    IBPgetstring("BAT_DATE", stMain.task_date, "清算日期");
+    IBPgetstring("BAT_CUPSNO", stMain.channel_no, "通道编号");
+    if(IBPIserr())
+        return ;
+
+    snprintf(stMain.id, sizeof(stMain.id), "%s%s%s%s", pstCts->m_szTrCode, stMain.task_date, 
+        stMain.settle_num, stMain.channel_no);
+    EXEC SQL SELECT * INTO :stMain FROM TBL_BAT_MAIN_LIST WHERE ID = :stMain.id;
+    if(SQLCODE)
+    {
+        SYSError(RET_DATABASE, "查询主控表(%s)失败，(%d)(%s)", stMain.id, SQLCODE, sDbsError());
+        return ;
+    }
+
+    if(BATCH_TASK_RUN == stMain.bat_state[0])
+    {
+        SYSError(RET_DATABASE, "批次(%s)正在运行，不能重复调用", pstCts->m_szTrCode);
+        return ;
+    }
+
+    if(TASK_REDO_NO == stMain.task_redo[0] && BATCH_TASK_SUCC == stMain.bat_state[0])
+    {
+        SYSError(RET_DATABASE, "批次(%s)已完成，不能重复运行", pstCts->m_szTrCode);
+        return ;
+    }
+
+    stMain.bat_state[0] = BATCH_TASK_RUN;
+    strcpy(stMain.bat_msg, "批次运行处理中");
+    EXEC SQL UPDATE TBL_BAT_MAIN_LIST SET
+        BAT_STATE = :stMain.bat_state,
+        BAT_MSG   = :stMain.bat_msg,
+        BAT_COST  = 0
+    WHERE ID = :stMain.id;
+    if(SQL_UD_ERR || EFFECT_NUM != 1)
+    {
+        SYSError(RET_DATABASE, "更新主控表(%s)，%s", stMain.id, sDbsError());
+        return ;
+    }
+
+    sTrimAll(stMain.id);
+    sTrimAll(stMain.bat_next);
+    IBPputstring("BAT_ID", stMain.id);
+    IBPputstring("BAT_CODE", stMain.bat_code);
+    IBPputstring("BAT_STATE", stMain.bat_state);
+    IBPputstring("BAT_MSG", stMain.bat_msg);
+    IBPputstring("BAT_ARGC", stMain.bat_argc);
+    IBPputstring("BAT_DSP", stMain.bat_dsp);
+    IBPputstring("BAT_NEXT", stMain.bat_next);
+    IBPputstring("BAT_SPLIT", stMain.task_split);
+    IBPputstring("BAT_ASSIGN", stMain.task_assign);
+    IBPputstring("BAT_REDO", stMain.task_redo);
+
+    return ;
+}
+
+/**************************************************************************************************
+    函 数 名：vSetBatFinish()
+    功能描述：设置批次状态
+    返回说明：
+        无
+ **************************************************************************************************/
+void    CBatch::vSetBatFinish()
+{
+    EXEC SQL BEGIN DECLARE SECTION;
+    TBatMainList stMain;
+    long         i, n, lIsNext = 0;
+    EXEC SQL END DECLARE SECTION;
+    GCts         *pstCts = (GCts *)pGetGloble();
+
+    memset(&stMain, 0, sizeof(TBatMainList));
+    IBPgetdeflong("BAT_NEXTDO", &lIsNext, 0);
+    IBPgetstring("BAT_ID", stMain.id, "批次id");
+    IBPgetstring("BAT_NEXT", stMain.bat_next, "批次下级编号");
+    if(IBPIserr())
+        return ;
+
+    stMain.bat_cost = pstCts->m_lUseTime;
+    if(!strcmp(sGetLastRet(), RET_SUCCESS))
+        stMain.bat_state[0] = BATCH_TASK_SUCC;
+    else
+        stMain.bat_state[0] = BATCH_TASK_FAIL;
+    strncpy(stMain.bat_msg, sGetLastMsg(), sizeof(stMain.bat_msg));
+
+    EXEC SQL UPDATE TBL_BAT_MAIN_LIST SET
+        BAT_COST  = :stMain.bat_cost,
+        BAT_MSG   = :stMain.bat_msg,
+        BAT_STATE = :stMain.bat_state
+    WHERE ID = :stMain.id;
+    if(SQL_UD_ERR || EFFECT_NUM != 1)
+    {
+        SYSError(RET_DATABASE, "更新主控表(%s)，%s", stMain.id, sDbsError());
+        return ;
+    }
+
+	if(STATUS_ERR == lGetLastStatus())
+		return ;
+
+    for(i = 0, n = lGetValidNum(stMain.bat_next, ":") && lIsNext; i < n; i ++)
+    {
+        memset(stMain.bat_code, 0, sizeof(stMain.bat_code));
+        strncpy(stMain.bat_code, sGetValueByIdx(stMain.bat_next, ":", i + 1), 
+            sizeof(stMain.bat_code));
+
+        if(RC_SUCC != lCallTrade((SATvm *)pGetSATvm(), pGetCmie(), stMain.bat_code))
+            continue ;
+    }
+
+    return ;
+}
+
+/*************************************************************************************************
+    code end
+**************************************************************************************************/
