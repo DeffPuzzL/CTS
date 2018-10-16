@@ -174,7 +174,6 @@ long    lHttpRequest(SATvm *pstSavm, void *arg)
             goto HTTP_ERROR;
     }
 
-
     if(pv->m_lRecv < pv->m_lBody)
     {
         if(0 > (lRet = lRecvBuffer(pc->m_skSock, pv->m_pvData + pv->m_lRecv, 
