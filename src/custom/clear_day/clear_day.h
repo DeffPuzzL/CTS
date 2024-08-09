@@ -23,13 +23,7 @@ public:
 
 	long    lCheckResource(SATvm *pstSavm);
 public:
-	void    vSystemDayend();
-	void    vSetSysNormal();
 	void    vSetSysPause();
-	void    vCreateTvmTable();
-	void	vActAmtTrasfer();
-	void    vGetSettleDay();
-	void    vExecuteScript();
 
 private:
     typedef struct
